@@ -1,0 +1,59 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv/
+*.egg-info/
+dist/
+build/
+
+# 配置文件（敏感信息，通过volume挂载）
+config/ai_config.yaml
+config/frequency_words.txt
+
+# 数据库和输出（通过volume挂载）
+*.db
+*.sqlite
+*.sqlite3
+output/
+
+# 日志
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 操作系统
+.DS_Store
+Thumbs.db
+
+# Git
+.git/
+.gitignore
+
+# Docker
+Dockerfile
+.dockerignore
+docker-compose.yml
+
+# 文档
+*.md
+README.md
+
+# 测试
+test_*.py
+*_test.py
+
+# 临时文件
+*.tmp
+*.bak
+*.cache

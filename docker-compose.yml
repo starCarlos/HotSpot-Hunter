@@ -1,0 +1,35 @@
+version: '3.8'
+
+services:
+  hotspot-hunter-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: hotspot-hunter-api
+    ports:
+      - "1236:1236"
+    volumes:
+      # 挂载代码目录（支持热重载）
+      - .:/app
+      # 挂载配置文件目录（只读）
+      - ./config:/app/config:ro
+      # 挂载数据目录（读写）
+      - ./output:/app/output
+      # 如果需要访问HotSpot Hunter项目的数据，取消下面的注释并修改路径
+      # - ../HotSpotHunter/output:/app/external-output:ro
+    environment:
+      # 数据目录配置（容器内路径）
+      - HOTSPOT_HUNTER=/app/output
+      # 时区
+      - TZ=Asia/Shanghai
+      # 定时任务配置
+      - CRAWL_SCHEDULER_ENABLED=${CRAWL_SCHEDULER_ENABLED:-true}
+      - CRAWL_INTERVAL_HOURS=${CRAWL_INTERVAL_HOURS:-1.0}
+    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "1236", "--reload"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:1236/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s

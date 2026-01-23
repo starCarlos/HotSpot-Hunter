@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HotSpot Hunter - 热点新闻</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container">
+        <!-- 头部 -->
+        <header class="header">
+            <div class="header-content">
+                <h1 class="logo">HotSpot Hunter</h1>
+                <div class="header-actions">
+                    <button id="themeToggle" class="btn-theme" title="切换主题">🌙</button>
+                    <input type="date" id="datePicker" class="date-picker">
+                    <button id="refreshBtn" class="btn-refresh">刷新</button>
+                </div>
+            </div>
+        </header>
+
+        <!-- 筛选栏 -->
+        <div class="filters">
+            <div class="filter-group">
+                <span class="filter-label">分类：</span>
+                <button class="filter-btn active" data-category="">全部</button>
+                <button class="filter-btn" data-category="forum">论坛</button>
+                <button class="filter-btn" data-category="news">新闻</button>
+            </div>
+            <div class="filter-group">
+                <span class="filter-label">关键词：</span>
+                <button class="filter-btn active" data-keyword="">全部</button>
+                <div id="keywordTags" class="keyword-tags"></div>
+            </div>
+            <div class="filter-group">
+                <span class="filter-label">重要性：</span>
+                <button class="filter-btn active" data-importance="">全部</button>
+                <button class="filter-btn" data-importance="critical">🔴 关键</button>
+                <button class="filter-btn" data-importance="high">🟠 重要</button>
+                <button class="filter-btn" data-importance="medium">🟡 中等</button>
+                <button class="filter-btn" data-importance="low">⚪ 一般</button>
+                <button class="filter-btn" data-importance="unrated">未评级</button>
+            </div>
+        </div>
+
+        <!-- 统计信息 -->
+        <div class="stats">
+            <span id="totalCount" class="stat-item">共 0 条</span>
+            <span id="categoryStats" class="stat-item"></span>
+            <span id="importanceStats" class="stat-item"></span>
+        </div>
+
+        <!-- 新闻列表 -->
+        <div class="news-list" id="newsList">
+            <div class="loading">加载中...</div>
+        </div>
+    </div>
+
+    <script src="/static/script.js"></script>
+</body>
+</html>

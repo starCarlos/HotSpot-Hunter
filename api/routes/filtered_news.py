@@ -1,0 +1,341 @@
+# coding=utf-8
+"""
+筛选后的新闻 API 路由
+"""
+
+from fastapi import APIRouter, HTTPException, Query
+from typing import Optional, List, Dict, Union
+from datetime import datetime
+from pathlib import Path
+import os
+import yaml
+
+from app.storage import get_storage_manager
+from app.core import load_frequency_words, matches_word_groups
+
+router = APIRouter()
+
+
+def _load_platform_types() -> Dict[str, List[str]]:
+    """加载平台类型配置"""
+    try:
+        # 从项目本地config目录加载配置
+        project_root = Path(__file__).parent.parent.parent
+        config_path = project_root / "config" / "platform_types.yaml"
+        
+        if config_path.exists():
+            with open(config_path, "r", encoding="utf-8") as f:
+                config = yaml.safe_load(f)
+                return {
+                    "forums": config.get("forums", []),
+                    "news": config.get("news", [])
+                }
+        else:
+            print(f"[警告] 平台类型配置文件不存在: {config_path}")
+    except Exception as e:
+        print(f"[警告] 加载平台类型配置失败: {e}")
+    
+    # 默认配置
+    return {
+        "forums": ["v2ex", "zhihu", "weibo", "hupu", "tieba", "douyin", "bilibili", "nowcoder", "juejin", "douban"],
+        "news": ["zaobao", "36kr", "toutiao", "ithome", "thepaper", "cls", "tencent", "sspai"]
+    }
+
+
+def _get_platform_category(platform_id: str, platform_types: Dict[str, List[str]]) -> str:
+    """获取平台分类（论坛或新闻）"""
+    if platform_id in platform_types.get("forums", []):
+        return "forum"
+    elif platform_id in platform_types.get("news", []):
+        return "news"
+    else:
+        # 默认归类为新闻
+        return "news"
+
+
+def _word_matches(word_config: Union[str, Dict], title_lower: str) -> bool:
+    """检查词是否在标题中匹配"""
+    if isinstance(word_config, str):
+        return word_config.lower() in title_lower
+    
+    if word_config.get("is_regex") and word_config.get("pattern"):
+        return bool(word_config["pattern"].search(title_lower))
+    else:
+        return word_config.get("word", "").lower() in title_lower
+
+
+def _get_matched_keyword(title: str, word_groups: List[Dict]) -> Optional[str]:
+    """获取匹配的关键词标签"""
+    title_lower = title.lower()
+    
+    for group in word_groups:
+        required_words = group.get("required", [])
+        normal_words = group.get("normal", [])
+        
+        # 检查必须词
+        if required_words:
+            all_required_present = all(
+                _word_matches(word, title_lower)
+                for word in required_words
+            )
+            if not all_required_present:
+                continue
+        
+        # 检查普通词
+        if normal_words:
+            any_normal_present = any(
+                _word_matches(word, title_lower)
+                for word in normal_words
+            )
+            if not any_normal_present:
+                continue
+        
+        # 返回显示名称
+        return group.get("display_name") or group.get("group_key", "其他")
+    
+    return None
+
+
+@router.get("/filtered", response_model=dict)
+async def get_filtered_news(
+    date: Optional[str] = Query(None, description="日期 (YYYY-MM-DD)，默认为今天"),
+    category: Optional[str] = Query(None, description="分类：forum（论坛）或 news（新闻）"),
+    keyword: Optional[str] = Query(None, description="关键词标签过滤"),
+    importance: Optional[str] = Query(None, description="重要性筛选：critical（关键）、high（重要）、medium（中等）、low（一般）"),
+):
+    """
+    获取筛选后的新闻数据
+    
+    - date: 日期，格式 YYYY-MM-DD，默认为今天
+    - category: 分类，forum（论坛）或 news（新闻）
+    - keyword: 关键词标签过滤
+    - importance: 重要性筛选，可选值：critical（关键）、high（重要）、medium（中等）、low（一般）
+    """
+    try:
+        # 获取数据目录
+        # 优先使用环境变量（Docker 环境）
+        data_dir = os.environ.get("HOTSPOT_DATA_DIR", None)
+        if not data_dir:
+            # 如果环境变量未设置，使用项目本地的 output 目录
+            project_root = Path(__file__).parent.parent.parent
+            local_output = project_root / "output"
+            data_dir = str(local_output)
+        
+        print(f"[API] 使用数据目录: {data_dir}")
+        
+        # 获取存储管理器
+        storage_manager = get_storage_manager(
+            backend_type="local",
+            data_dir=data_dir,
+            enable_txt=False,
+            enable_html=False,
+            timezone="Asia/Shanghai",
+        )
+        
+        # 检查数据目录是否存在
+        data_dir_path = Path(data_dir)
+        if not data_dir_path.exists():
+            print(f"[API] 警告：数据目录不存在: {data_dir}")
+            return {
+                "date": date or datetime.now().strftime("%Y-%m-%d"),
+                "items": [],
+                "total_count": 0,
+                "keywords": [],
+                "categories": {"forum": 0, "news": 0},
+                "message": f"数据目录不存在: {data_dir}。请确保数据目录已正确挂载或已抓取数据。"
+            }
+        
+        # 获取新闻数据
+        data = storage_manager.get_today_all_data(date)
+        if not data:
+            print(f"[API] 警告：未找到日期 {date or '今天'} 的数据")
+            return {
+                "date": date or datetime.now().strftime("%Y-%m-%d"),
+                "items": [],
+                "total_count": 0,
+                "keywords": [],
+                "categories": {"forum": 0, "news": 0},
+                "message": f"未找到日期 {date or '今天'} 的数据。请确保已抓取数据。"
+            }
+        
+        # 加载关键词配置（从项目本地config目录）
+        try:
+            project_root = Path(__file__).parent.parent.parent
+            frequency_file = project_root / "config" / "frequency_words.txt"
+            
+            if frequency_file.exists():
+                word_groups, filter_words, global_filters = load_frequency_words(
+                    str(frequency_file)
+                )
+            else:
+                print(f"[警告] 关键词配置文件不存在: {frequency_file}，使用空配置")
+                word_groups = []
+                filter_words = []
+                global_filters = []
+        except Exception as e:
+            print(f"[警告] 加载关键词配置失败: {e}")
+            word_groups = []
+            filter_words = []
+            global_filters = []
+        
+        # 加载平台类型配置
+        platform_types = _load_platform_types()
+        
+        # 筛选新闻
+        filtered_items = []
+        keyword_stats = {}  # 统计每个关键词的数量
+        
+        for platform_id, news_list in data.items.items():
+            platform_name = data.id_to_name.get(platform_id, platform_id)
+            platform_category = _get_platform_category(platform_id, platform_types)
+            
+            # 分类过滤
+            if category and platform_category != category:
+                continue
+            
+            for item in news_list:
+                title = item.title
+                
+                # 关键词和敏感词筛选（如果有配置）
+                # 注意：数据在入库时已经经过关键词筛选，此处的检查主要用于：
+                # 1. 兼容没有配置关键词的情况（保存了所有新闻）
+                # 2. 如果用户修改了关键词配置，API 仍然可以正确筛选
+                if word_groups or filter_words or global_filters:
+                    if not matches_word_groups(title, word_groups, filter_words, global_filters):
+                        continue
+                
+                # 获取匹配的关键词标签
+                matched_keyword = _get_matched_keyword(title, word_groups) if word_groups else None
+                
+                # 关键词过滤
+                if keyword and matched_keyword != keyword:
+                    continue
+                
+                # 统计关键词
+                keyword_label = matched_keyword or "未分类"
+                if keyword_label not in keyword_stats:
+                    keyword_stats[keyword_label] = 0
+                keyword_stats[keyword_label] += 1
+                
+                # 构建新闻项
+                news_item = {
+                    "title": title,
+                    "platform_id": platform_id,
+                    "platform_name": platform_name,
+                    "category": platform_category,
+                    "rank": item.rank,
+                    "url": item.url,
+                    "mobile_url": item.mobile_url,
+                    "crawl_time": item.crawl_time,
+                    "first_time": item.first_time,
+                    "last_time": item.last_time,
+                    "count": item.count,
+                    "keyword": keyword_label,
+                    "importance": "",  # 稍后填充
+                }
+                
+                filtered_items.append(news_item)
+        
+        # 按时间倒序排序（使用 last_time）
+        filtered_items.sort(
+            key=lambda x: x["last_time"] if x["last_time"] else "",
+            reverse=True
+        )
+        
+        # 批量获取重要性评级（从数据库）
+        backend = storage_manager.get_backend()
+        importance_map = backend.batch_get_news_importance(filtered_items, date)
+        
+        # 直接从数据库读取重要性评级，不再进行实时分析
+        for news_item in filtered_items:
+            title = news_item["title"]
+            platform_id = news_item["platform_id"]
+            key = (title, platform_id)
+            
+            # 从数据库获取
+            if key in importance_map:
+                news_item["importance"] = importance_map[key]
+            else:
+                # 如果数据库中没有，保持为空（会在数据抓取时自动分析）
+                news_item["importance"] = ""
+        
+        # 重要性筛选
+        if importance:
+            valid_importance_levels = ["critical", "high", "medium", "low"]
+            importance_lower = importance.lower().strip()
+            if importance_lower not in valid_importance_levels:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"无效的重要性级别: {importance}。有效值: {', '.join(valid_importance_levels)}"
+                )
+            # 记录筛选前的数量
+            before_count = len(filtered_items)
+            # 过滤出匹配的重要性级别（确保正确处理空字符串和大小写）
+            filtered_items = [
+                item for item in filtered_items
+                if item.get("importance", "").strip() and item["importance"].strip().lower() == importance_lower
+            ]
+            print(f"[API] 重要性筛选: {importance_lower}, 筛选前: {before_count}, 筛选后: {len(filtered_items)}")
+        
+        # 统计分类数量
+        category_stats = {
+            "forum": sum(1 for item in filtered_items if item["category"] == "forum"),
+            "news": sum(1 for item in filtered_items if item["category"] == "news")
+        }
+        
+        # 统计重要性数量（确保正确处理空字符串）
+        importance_stats = {
+            "critical": sum(1 for item in filtered_items if item.get("importance", "").strip().lower() == "critical"),
+            "high": sum(1 for item in filtered_items if item.get("importance", "").strip().lower() == "high"),
+            "medium": sum(1 for item in filtered_items if item.get("importance", "").strip().lower() == "medium"),
+            "low": sum(1 for item in filtered_items if item.get("importance", "").strip().lower() == "low"),
+            "unrated": sum(1 for item in filtered_items if not item.get("importance", "").strip()),
+        }
+        
+        # 获取所有关键词列表（按数量排序）
+        keywords = sorted(
+            keyword_stats.items(),
+            key=lambda x: x[1],
+            reverse=True
+        )
+        
+        return {
+            "date": data.date,
+            "crawl_time": data.crawl_time,
+            "items": filtered_items,
+            "total_count": len(filtered_items),
+            "keywords": [{"name": k, "count": v} for k, v in keywords],
+            "categories": category_stats,
+            "importance_stats": importance_stats
+        }
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"查询失败: {str(e)}")
+
+
+@router.get("/keywords", response_model=List[dict])
+async def get_keywords():
+    """获取所有关键词列表"""
+    try:
+        project_root = Path(__file__).parent.parent.parent
+        frequency_file = project_root / "config" / "frequency_words.txt"
+        
+        if frequency_file.exists():
+            word_groups, _, _ = load_frequency_words(str(frequency_file))
+        else:
+            print(f"[警告] 关键词配置文件不存在: {frequency_file}")
+            word_groups = []
+        
+        keywords = []
+        for group in word_groups:
+            display_name = group.get("display_name") or group.get("group_key", "其他")
+            keywords.append({
+                "name": display_name,
+                "key": group.get("group_key", "")
+            })
+        
+        return keywords
+    except Exception as e:
+        return []

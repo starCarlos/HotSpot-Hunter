@@ -1,0 +1,69 @@
+# ═══════════════════════════════════════════════════════════════
+#                    平台类型配置文件
+# ═══════════════════════════════════════════════════════════════
+#
+# 定义每个平台的类型：
+# - forum: 论坛/社区（如 V2EX、知乎、虎扑等）
+# - news: 新闻网站（如财联社、36氪、IT之家等）
+#
+# 注意：未在此列表中的平台默认为 news 类型
+# ═══════════════════════════════════════════════════════════════
+
+# 论坛/社区平台
+forums:
+  - v2ex
+  - v2ex-share
+  - zhihu
+  - weibo
+  - hupu
+  - tieba
+  - douyin
+  - pcbeta
+  - pcbeta-windows11
+  - hackernews
+  - producthunt
+  - github
+  - github-trending-today
+  - bilibili
+  - bilibili-hot-search
+  - nowcoder
+  - juejin
+  - chongbuluo
+  - chongbuluo-latest
+  - chongbuluo-hot
+  - douban
+  - freebuf
+
+# 新闻网站平台
+news:
+  - zaobao
+  - mktnews
+  - mktnews-flash
+  - wallstreetcn
+  - wallstreetcn-quick
+  - wallstreetcn-news
+  - wallstreetcn-hot
+  - 36kr
+  - 36kr-quick
+  - 36kr-renqi
+  - toutiao
+  - ithome
+  - thepaper
+  - sputniknewscn
+  - cankaoxiaoxi
+  - cls
+  - cls-telegraph
+  - cls-depth
+  - cls-hot
+  - gelonghui
+  - fastbull
+  - fastbull-express
+  - fastbull-news
+  - solidot
+  - kaopu
+  - jin10
+  - baidu
+  - sspai
+  - ifeng
+  - tencent
+  - tencent-hot

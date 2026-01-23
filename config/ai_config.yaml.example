@@ -1,0 +1,35 @@
+# AI 配置示例文件
+# 复制此文件为 ai_config.yaml 并填入你的配置
+
+# AI API Key（必需）
+api_key: ""
+
+# AI 提供商（可选，默认: deepseek）
+# 支持: deepseek, openai, gemini 等
+provider: "deepseek"
+
+# AI 模型名称（可选，默认: deepseek-chat）
+# DeepSeek: deepseek-chat, deepseek-chat-0324
+# OpenAI: gpt-3.5-turbo, gpt-4
+# Gemini: gemini-1.5-flash, gemini-1.5-pro
+model: "deepseek-chat"
+
+# API 基础URL（可选）
+# 如果为空，将使用默认URL
+# DeepSeek: https://api.deepseek.com/v1/chat/completions
+# OpenAI: https://api.openai.com/v1/chat/completions
+base_url: ""
+
+# 请求超时时间（秒，默认: 30）
+timeout: 30
+
+# 温度参数（0.0-2.0，默认: 0.7）
+# 较低的值使输出更确定，较高的值使输出更随机
+temperature: 0.7
+
+# 最大token数（默认: 500）
+max_tokens: 500
+
+# 额外参数（可选，JSON格式）
+# 用于传递特定API的额外参数
+extra_params: {}

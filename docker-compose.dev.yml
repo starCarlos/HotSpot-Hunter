@@ -1,0 +1,28 @@
+version: '3.8'
+
+services:
+  hotspot-hunter-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: hotspot-hunter-api-dev
+    ports:
+      - "1236:1236"
+    volumes:
+      # 开发模式：挂载代码目录以便热重载
+      - .:/app
+      # 配置文件目录
+      - ./config:/app/config
+      # 数据目录
+      - ./output:/app/output
+    environment:
+      - HOTSPOT_DATA_DIR=/app/output
+      - TZ=Asia/Shanghai
+      # 定时任务配置
+      - CRAWL_SCHEDULER_ENABLED=${CRAWL_SCHEDULER_ENABLED:-true}
+      - CRAWL_INTERVAL_HOURS=${CRAWL_INTERVAL_HOURS:-1.0}
+      # 文件监控配置（使用 watchfiles 后端）
+      - UVICORN_RELOAD_INCLUDE=*.py
+      - UVICORN_RELOAD_EXCLUDE=*.pyc,__pycache__,.git,*.db,*.db-shm,*.db-wal
+    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "1236", "--reload", "--reload-dir", "/app"]
+    restart: unless-stopped

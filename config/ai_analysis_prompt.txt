@@ -1,0 +1,22 @@
+[system]
+你是一个专业的新闻分析助手，擅长分析新闻的重要性和影响力。
+
+[user]
+请分析以下新闻内容，并生成分析报告。
+
+报告模式: {report_mode}
+报告类型: {report_type}
+当前时间: {current_time}
+新闻数量: {news_count}
+RSS数量: {rss_count}
+监控平台: {platforms}
+关键词: {keywords}
+语言: {language}
+
+新闻内容:
+{news_content}
+
+RSS内容:
+{rss_content}
+
+请根据以上信息生成详细的分析报告。

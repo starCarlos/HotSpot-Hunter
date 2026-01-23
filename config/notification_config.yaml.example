@@ -1,0 +1,62 @@
+# ═══════════════════════════════════════════════════════════════
+#                    推送通知配置文件示例
+# ═══════════════════════════════════════════════════════════════
+#
+# 复制此文件为 notification_config.yaml 并填入你的配置
+# ═══════════════════════════════════════════════════════════════
+
+# 飞书 Webhook URL（多个用 ; 分隔）
+FEISHU_WEBHOOK_URL: ""
+
+# 钉钉 Webhook URL（多个用 ; 分隔）
+DINGTALK_WEBHOOK_URL: ""
+
+# 企业微信 Webhook URL（多个用 ; 分隔）
+WEWORK_WEBHOOK_URL: ""
+
+# Telegram Bot Token 和 Chat ID（多个用 ; 分隔，需配对）
+TELEGRAM_BOT_TOKEN: ""
+TELEGRAM_CHAT_ID: ""
+
+# ntfy 配置
+NTFY_SERVER_URL: "https://ntfy.sh"  # ntfy 服务器地址
+NTFY_TOPIC: ""  # Topic（多个用 ; 分隔）
+NTFY_TOKEN: ""  # 认证 Token（可选，多个用 ; 分隔）
+
+# Bark URL（多个用 ; 分隔）
+BARK_URL: ""
+
+# Slack Webhook URL（多个用 ; 分隔）
+SLACK_WEBHOOK_URL: ""
+
+# 通用 Webhook URL（多个用 ; 分隔）
+GENERIC_WEBHOOK_URL: ""
+GENERIC_WEBHOOK_TEMPLATE: ""  # 自定义模板（可选）
+
+# 邮件配置
+EMAIL_FROM: ""  # 发件人邮箱
+EMAIL_PASSWORD: ""  # 邮箱密码/授权码
+EMAIL_TO: ""  # 收件人邮箱（多个用逗号分隔）
+EMAIL_SMTP_SERVER: ""  # 自定义 SMTP 服务器（可选）
+EMAIL_SMTP_PORT: ""  # 自定义 SMTP 端口（可选）
+
+# 推送配置
+MAX_ACCOUNTS_PER_CHANNEL: 3  # 每个渠道最多使用的账号数量
+BATCH_SEND_INTERVAL: 1.0  # 批次发送间隔（秒）
+
+# 各渠道批次大小限制
+FEISHU_BATCH_SIZE: 29000
+DINGTALK_BATCH_SIZE: 20000
+MESSAGE_BATCH_SIZE: 4000  # 企业微信、Telegram、Slack 等
+BARK_BATCH_SIZE: 3600
+
+# 企业微信消息类型
+WEWORK_MSG_TYPE: "markdown"  # markdown 或 text
+
+# 显示区域配置
+DISPLAY:
+  REGIONS:
+    HOTLIST: true  # 热榜
+    RSS: true  # RSS
+    AI_ANALYSIS: true  # AI 分析
+    STANDALONE: false  # 独立展示区
