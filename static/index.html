@@ -14,7 +14,12 @@
                 <h1 class="logo">HotSpot Hunter</h1>
                 <div class="header-actions">
                     <button id="themeToggle" class="btn-theme" title="切换主题">🌙</button>
-                    <input type="date" id="datePicker" class="date-picker">
+                    <div class="date-range-picker">
+                        <label for="startDate" class="date-label">开始日期：</label>
+                        <input type="date" id="startDate" class="date-picker">
+                        <label for="endDate" class="date-label">结束日期：</label>
+                        <input type="date" id="endDate" class="date-picker">
+                    </div>
                     <button id="refreshBtn" class="btn-refresh">刷新</button>
                 </div>
             </div>

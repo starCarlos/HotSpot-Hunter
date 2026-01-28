@@ -307,6 +307,21 @@ class StorageManager:
         """
         return self.get_backend().record_push(report_type, date)
 
+    def analyze_all_news_importance(self, date: Optional[str] = None) -> None:
+        """
+        分析指定日期的所有新闻重要性（从数据库读取数据）
+        
+        此方法用于在所有平台抓取完成后，统一分析所有新闻的重要性。
+
+        Args:
+            date: 日期字符串，默认为今天
+        """
+        backend = self.get_backend()
+        if hasattr(backend, 'analyze_all_news_importance'):
+            backend.analyze_all_news_importance(date)
+        else:
+            print("[存储管理器] 当前存储后端不支持统一分析重要性")
+
 
 def get_storage_manager(
     backend_type: str = "auto",

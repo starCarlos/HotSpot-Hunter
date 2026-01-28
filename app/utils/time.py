@@ -51,19 +51,30 @@ def format_date_folder(
     return get_configured_time(timezone).strftime("%Y-%m")
 
 
-def format_time_filename(timezone: str = DEFAULT_TIMEZONE) -> str:
+def get_timestamp(timezone: str = DEFAULT_TIMEZONE) -> int:
     """
-    格式化时间文件名 (格式: HH-MM，用于文件名)
-
-    Windows 系统不支持冒号作为文件名，因此使用连字符
+    获取当前时间的 Unix 时间戳（秒级精度）
 
     Args:
         timezone: 时区名称
 
     Returns:
-        格式化后的时间字符串，如 '15-30'
+        Unix 时间戳（整数）
     """
-    return get_configured_time(timezone).strftime("%H-%M")
+    return int(get_configured_time(timezone).timestamp())
+
+
+def format_time_filename(timezone: str = DEFAULT_TIMEZONE) -> int:
+    """
+    获取时间戳（用于数据库存储）
+
+    Args:
+        timezone: 时区名称
+
+    Returns:
+        Unix 时间戳（整数）
+    """
+    return get_timestamp(timezone)
 
 
 def get_current_time_display(timezone: str = DEFAULT_TIMEZONE) -> str:
@@ -77,6 +88,44 @@ def get_current_time_display(timezone: str = DEFAULT_TIMEZONE) -> str:
         格式化后的时间字符串，如 '15:30'
     """
     return get_configured_time(timezone).strftime("%H:%M")
+
+
+def timestamp_to_display(timestamp: int, timezone: str = DEFAULT_TIMEZONE) -> str:
+    """
+    将 Unix 时间戳转换为显示格式 (格式: YYYY-MM-DD HH:MM:SS)
+
+    Args:
+        timestamp: Unix 时间戳（整数）
+        timezone: 时区名称
+
+    Returns:
+        格式化后的时间字符串，如 '2024-01-15 09:30:00'
+    """
+    try:
+        tz = pytz.timezone(timezone)
+    except pytz.UnknownTimeZoneError:
+        tz = pytz.timezone(DEFAULT_TIMEZONE)
+    dt = datetime.fromtimestamp(timestamp, tz=tz)
+    return dt.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def timestamp_to_time_display(timestamp: int, timezone: str = DEFAULT_TIMEZONE) -> str:
+    """
+    将 Unix 时间戳转换为时间显示格式 (格式: HH:MM)
+
+    Args:
+        timestamp: Unix 时间戳（整数）
+        timezone: 时区名称
+
+    Returns:
+        格式化后的时间字符串，如 '09:30'
+    """
+    try:
+        tz = pytz.timezone(timezone)
+    except pytz.UnknownTimeZoneError:
+        tz = pytz.timezone(DEFAULT_TIMEZONE)
+    dt = datetime.fromtimestamp(timestamp, tz=tz)
+    return dt.strftime("%H:%M")
 
 
 def convert_time_for_display(time_str: str) -> str:

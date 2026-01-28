@@ -24,8 +24,8 @@ CREATE TABLE IF NOT EXISTS news_items (
     rank INTEGER NOT NULL,
     url TEXT DEFAULT '',
     mobile_url TEXT DEFAULT '',
-    first_crawl_time TEXT NOT NULL,      -- 首次抓取时间
-    last_crawl_time TEXT NOT NULL,       -- 最后抓取时间
+    first_crawl_time INTEGER NOT NULL,   -- 首次抓取时间（Unix 时间戳）
+    last_crawl_time INTEGER NOT NULL,    -- 最后抓取时间（Unix 时间戳）
     crawl_count INTEGER DEFAULT 1,       -- 抓取次数
     importance TEXT DEFAULT '',           -- AI分析的重要性评级: 'critical'|'high'|'medium'|'low'
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -54,7 +54,7 @@ CREATE TABLE IF NOT EXISTS rank_history (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     news_item_id INTEGER NOT NULL,
     rank INTEGER NOT NULL,
-    crawl_time TEXT NOT NULL,
+    crawl_time INTEGER NOT NULL,         -- 抓取时间（Unix 时间戳）
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (news_item_id) REFERENCES news_items(id)
 );
@@ -65,7 +65,7 @@ CREATE TABLE IF NOT EXISTS rank_history (
 -- ============================================
 CREATE TABLE IF NOT EXISTS crawl_records (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    crawl_time TEXT NOT NULL UNIQUE,
+    crawl_time INTEGER NOT NULL UNIQUE,  -- 抓取时间（Unix 时间戳）
     total_items INTEGER DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );

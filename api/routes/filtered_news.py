@@ -5,13 +5,13 @@
 
 from fastapi import APIRouter, HTTPException, Query
 from typing import Optional, List, Dict, Union
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 import os
 import yaml
 
 from app.storage import get_storage_manager
-from app.core import load_frequency_words, matches_word_groups
+from app.core import load_frequency_words, load_blocked_words, matches_word_groups
 
 router = APIRouter()
 
@@ -98,7 +98,9 @@ def _get_matched_keyword(title: str, word_groups: List[Dict]) -> Optional[str]:
 
 @router.get("/filtered", response_model=dict)
 async def get_filtered_news(
-    date: Optional[str] = Query(None, description="日期 (YYYY-MM-DD)，默认为今天"),
+    date: Optional[str] = Query(None, description="日期 (YYYY-MM-DD)，默认为今天（已废弃，使用 start_date 和 end_date）"),
+    start_date: Optional[str] = Query(None, description="开始日期 (YYYY-MM-DD)"),
+    end_date: Optional[str] = Query(None, description="结束日期 (YYYY-MM-DD)"),
     category: Optional[str] = Query(None, description="分类：forum（论坛）或 news（新闻）"),
     keyword: Optional[str] = Query(None, description="关键词标签过滤"),
     importance: Optional[str] = Query(None, description="重要性筛选：critical（关键）、high（重要）、medium（中等）、low（一般）"),
@@ -106,7 +108,9 @@ async def get_filtered_news(
     """
     获取筛选后的新闻数据
     
-    - date: 日期，格式 YYYY-MM-DD，默认为今天
+    - date: 日期，格式 YYYY-MM-DD（已废弃，使用 start_date 和 end_date）
+    - start_date: 开始日期，格式 YYYY-MM-DD
+    - end_date: 结束日期，格式 YYYY-MM-DD
     - category: 分类，forum（论坛）或 news（新闻）
     - keyword: 关键词标签过滤
     - importance: 重要性筛选，可选值：critical（关键）、high（重要）、medium（中等）、low（一般）
@@ -145,17 +149,56 @@ async def get_filtered_news(
                 "message": f"数据目录不存在: {data_dir}。请确保数据目录已正确挂载或已抓取数据。"
             }
         
-        # 获取新闻数据
-        data = storage_manager.get_today_all_data(date)
+        # 处理日期范围
+        # 优先使用 start_date 和 end_date，如果没有则使用 date（向后兼容）
+        if start_date and end_date:
+            # 验证日期范围
+            try:
+                start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+                end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+                if start_dt > end_dt:
+                    raise HTTPException(status_code=400, detail="开始日期不能晚于结束日期")
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=f"日期格式错误: {str(e)}")
+            
+            # 获取日期范围内的所有数据，使用 merge_with 方法去重合并
+            from app.storage.base import NewsData
+            data = None
+            current_dt = start_dt
+            
+            while current_dt <= end_dt:
+                date_str = current_dt.strftime("%Y-%m-%d")
+                day_data = storage_manager.get_today_all_data(date_str)
+                
+                if day_data:
+                    if data is None:
+                        # 第一个有数据的日期，直接使用
+                        data = day_data
+                        data.date = f"{start_date} 至 {end_date}"
+                    else:
+                        # 后续日期，使用 merge_with 方法合并（会自动去重）
+                        data = data.merge_with(day_data)
+                        data.date = f"{start_date} 至 {end_date}"
+                
+                current_dt += timedelta(days=1)
+        elif date:
+            # 向后兼容：使用单个日期
+            data = storage_manager.get_today_all_data(date)
+        else:
+            # 默认使用今天
+            today = datetime.now().strftime("%Y-%m-%d")
+            data = storage_manager.get_today_all_data(today)
+        
         if not data:
-            print(f"[API] 警告：未找到日期 {date or '今天'} 的数据")
+            date_display = f"{start_date} 至 {end_date}" if (start_date and end_date) else (date or "今天")
+            print(f"[API] 警告：未找到日期 {date_display} 的数据")
             return {
-                "date": date or datetime.now().strftime("%Y-%m-%d"),
+                "date": date_display,
                 "items": [],
                 "total_count": 0,
                 "keywords": [],
                 "categories": {"forum": 0, "news": 0},
-                "message": f"未找到日期 {date or '今天'} 的数据。请确保已抓取数据。"
+                "message": f"未找到日期 {date_display} 的数据。请确保已抓取数据。"
             }
         
         # 加载关键词配置（从项目本地config目录）
@@ -178,12 +221,24 @@ async def get_filtered_news(
             filter_words = []
             global_filters = []
         
+        # 加载屏蔽词配置
+        blocked_words = []
+        try:
+            project_root = Path(__file__).parent.parent.parent
+            blocked_file = project_root / "config" / "blocked_words.txt"
+            
+            if blocked_file.exists():
+                blocked_words = load_blocked_words(str(blocked_file))
+        except Exception as e:
+            print(f"[警告] 加载屏蔽词配置失败: {e}")
+        
         # 加载平台类型配置
         platform_types = _load_platform_types()
         
         # 筛选新闻
         filtered_items = []
         keyword_stats = {}  # 统计每个关键词的数量
+        seen_items = set()  # 用于去重：记录已处理的 (platform_id, title) 组合
         
         for platform_id, news_list in data.items.items():
             platform_name = data.id_to_name.get(platform_id, platform_id)
@@ -196,12 +251,19 @@ async def get_filtered_news(
             for item in news_list:
                 title = item.title
                 
+                # 去重：检查是否已经处理过相同的 (platform_id, title) 组合
+                item_key = (platform_id, title)
+                if item_key in seen_items:
+                    continue
+                seen_items.add(item_key)
+                
                 # 关键词和敏感词筛选（如果有配置）
                 # 注意：数据在入库时已经经过关键词筛选，此处的检查主要用于：
                 # 1. 兼容没有配置关键词的情况（保存了所有新闻）
                 # 2. 如果用户修改了关键词配置，API 仍然可以正确筛选
-                if word_groups or filter_words or global_filters:
-                    if not matches_word_groups(title, word_groups, filter_words, global_filters):
+                # 3. 屏蔽词检查（优先级最高）
+                if word_groups or filter_words or global_filters or blocked_words:
+                    if not matches_word_groups(title, word_groups, filter_words, global_filters, blocked_words):
                         continue
                 
                 # 获取匹配的关键词标签
@@ -243,8 +305,10 @@ async def get_filtered_news(
         )
         
         # 批量获取重要性评级（从数据库）
+        # 对于日期范围，使用结束日期作为查询日期
+        query_date = end_date if (start_date and end_date) else (date or datetime.now().strftime("%Y-%m-%d"))
         backend = storage_manager.get_backend()
-        importance_map = backend.batch_get_news_importance(filtered_items, date)
+        importance_map = backend.batch_get_news_importance(filtered_items, query_date)
         
         # 直接从数据库读取重要性评级，不再进行实时分析
         for news_item in filtered_items:
@@ -299,8 +363,14 @@ async def get_filtered_news(
             reverse=True
         )
         
+        # 确定返回的日期显示
+        if start_date and end_date:
+            date_display = f"{start_date} 至 {end_date}"
+        else:
+            date_display = data.date
+        
         return {
-            "date": data.date,
+            "date": date_display,
             "crawl_time": data.crawl_time,
             "items": filtered_items,
             "total_count": len(filtered_items),

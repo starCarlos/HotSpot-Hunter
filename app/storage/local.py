@@ -76,8 +76,8 @@ class LocalStorageBackend(SQLiteStorageMixin, StorageBackend):
         """格式化日期文件夹名 (ISO 格式: YYYY-MM，按月存储)"""
         return format_date_folder(date, self.timezone)
 
-    def _format_time_filename(self) -> str:
-        """格式化时间文件名 (格式: HH-MM)"""
+    def _format_time_filename(self) -> int:
+        """获取时间戳（Unix 时间戳，用于数据库存储）"""
         return format_time_filename(self.timezone)
 
     def _get_db_path(self, date: Optional[str] = None, db_type: str = "news") -> Path:
@@ -132,8 +132,14 @@ class LocalStorageBackend(SQLiteStorageMixin, StorageBackend):
     # StorageBackend 接口实现（委托给 mixin）
     # ========================================
 
-    def save_news_data(self, data: NewsData) -> bool:
-        """保存新闻数据到 SQLite"""
+    def save_news_data(self, data: NewsData, analyze_importance: bool = True) -> bool:
+        """
+        保存新闻数据到 SQLite
+        
+        Args:
+            data: 新闻数据
+            analyze_importance: 是否立即分析重要性，默认为 True（保持向后兼容）
+        """
         db_path = self._get_db_path(data.date)
         if not db_path.exists():
             # 确保目录存在
@@ -153,8 +159,9 @@ class LocalStorageBackend(SQLiteStorageMixin, StorageBackend):
                 log_parts.append(f"脱榜 {off_list_count} 条")
             print("，".join(log_parts))
             
-            # 保存成功后，异步分析新增新闻的重要性
-            self._analyze_news_importance_async(data, data.date)
+            # 保存成功后，根据参数决定是否立即分析新增新闻的重要性
+            if analyze_importance:
+                self._analyze_news_importance_async(data, data.date)
 
         return success
     
@@ -337,6 +344,203 @@ class LocalStorageBackend(SQLiteStorageMixin, StorageBackend):
         # 在后台线程中执行分析
         thread = threading.Thread(target=analyze_in_background, daemon=True)
         thread.start()
+    
+    def analyze_all_news_importance(self, date: Optional[str] = None):
+        """
+        分析指定日期的所有新闻重要性（从数据库读取数据）
+        
+        此方法用于在所有平台抓取完成后，统一分析所有新闻的重要性。
+        分析完成后会同步推送重要新闻。
+        
+        Args:
+            date: 日期字符串，默认为今天
+        """
+        from app.ai.importance_analyzer import batch_analyze_importance
+        from app.utils.config_loader import load_ai_config
+        from datetime import datetime
+        
+        try:
+            # 加载AI配置
+            ai_config = load_ai_config()
+            if not ai_config.get("API_KEY"):
+                print("[重要性分析] 未配置AI API Key，跳过分析")
+                return
+            
+            # 从数据库读取所有数据
+            all_data = self.get_today_all_data(date)
+            if not all_data:
+                print("[重要性分析] 未找到数据，跳过分析")
+                return
+            
+            # 收集需要分析的新闻（只分析新增的，已有importance的跳过，重复的新闻跳过）
+            news_to_analyze = []
+            for platform_id, news_list in all_data.items.items():
+                platform_name = all_data.id_to_name.get(platform_id, platform_id)
+                for item in news_list:
+                    # 检查是否已有重要性评级
+                    existing_importance = self.get_news_importance(
+                        title=item.title,
+                        platform_id=platform_id,
+                        date=date or all_data.date,
+                    )
+                    if existing_importance:
+                        continue  # 已有重要性评级，跳过
+                    
+                    # 检查是否是重复的新闻
+                    # 重复的新闻（数据完全相同）不进入AI分析和推送
+                    # 判断标准：last_time == first_time 且 count > 1 且没有排名历史变化
+                    # 或者更简单：last_time == first_time 且 count > 1（说明从未更新过）
+                    if item.last_time and item.first_time:
+                        try:
+                            last_time_int = int(item.last_time) if item.last_time else 0
+                            first_time_int = int(item.first_time) if item.first_time else 0
+                            # 如果 last_time == first_time 且 count > 1，说明是重复的新闻（从未更新过）
+                            # 第一次出现的新闻（count == 1）即使 last_time == first_time 也要分析
+                            if last_time_int == first_time_int and item.count > 1:
+                                # 进一步检查：如果没有排名历史变化，确认是重复的
+                                # 如果 rank_timeline 为空或只有一个记录，说明是重复的
+                                if not item.rank_timeline or len(item.rank_timeline) <= 1:
+                                    continue  # 重复的新闻，跳过
+                        except (ValueError, TypeError):
+                            pass  # 如果转换失败，继续处理
+                    
+                    news_to_analyze.append({
+                        "title": item.title,
+                        "platform_id": platform_id,
+                        "platform_name": platform_name,
+                        "rank": item.rank,
+                    })
+            
+            if not news_to_analyze:
+                print("[重要性分析] 没有需要分析的新闻")
+                return
+
+            # 限制每次分析的数量，避免触发API速率限制
+            max_analyze_per_run = 100
+            if len(news_to_analyze) > max_analyze_per_run:
+                print(f"[重要性分析] 发现 {len(news_to_analyze)} 条新闻，限制本次分析 {max_analyze_per_run} 条")
+                news_to_analyze = news_to_analyze[:max_analyze_per_run]
+
+            print(f"[重要性分析] 开始批量分析 {len(news_to_analyze)} 条新闻的重要性...")
+
+            # 批量分析
+            get_time_func = lambda: datetime.now()
+            batch_results = batch_analyze_importance(
+                news_items=news_to_analyze,
+                ai_config=ai_config,
+                get_time_func=get_time_func,
+                batch_size=20,
+            )
+            
+            # 保存结果到数据库，并收集重要新闻
+            saved_count = 0
+            important_news = []  # 收集重要性为 critical 或 high 的新闻
+            
+            for key, importance in batch_results.items():
+                title, platform_id = key
+                if self.update_news_importance(
+                    title=title,
+                    platform_id=platform_id,
+                    importance=importance,
+                    date=date or all_data.date,
+                ):
+                    saved_count += 1
+                    
+                    # 如果是重要新闻（critical 或 high），收集信息
+                    if importance in ["critical", "high"]:
+                        # 查找新闻的详细信息
+                        platform_name = all_data.id_to_name.get(platform_id, platform_id)
+                        news_item = None
+                        for item in all_data.items.get(platform_id, []):
+                            if item.title == title:
+                                news_item = item
+                                break
+                        
+                        important_news.append({
+                            "title": title,
+                            "platform_id": platform_id,
+                            "platform_name": platform_name,
+                            "rank": news_item.rank if news_item else 0,
+                            "importance": importance,
+                            "url": news_item.url if news_item else "",
+                        })
+            
+            print(f"[重要性分析] 完成，成功分析并保存 {saved_count} 条新闻的重要性")
+            
+            # 如果有重要新闻，推送到所有配置的渠道（同步执行）
+            if important_news:
+                print(f"[重要新闻推送] 发现 {len(important_news)} 条重要新闻（critical/high），准备推送到所有配置的渠道...")
+                try:
+                    from app.utils.notification_config_loader import load_notification_config
+                    from app.notification.important_news_sender import send_important_news_to_all_channels
+                    
+                    # 加载推送配置
+                    notification_config = load_notification_config()
+                    
+                    # 检查是否有配置的渠道
+                    has_configured_channels = (
+                        notification_config.get("FEISHU_WEBHOOK_URL") or
+                        notification_config.get("DINGTALK_WEBHOOK_URL") or
+                        notification_config.get("WEWORK_WEBHOOK_URL") or
+                        (notification_config.get("TELEGRAM_BOT_TOKEN") and notification_config.get("TELEGRAM_CHAT_ID")) or
+                        (notification_config.get("NTFY_SERVER_URL") and notification_config.get("NTFY_TOPIC")) or
+                        notification_config.get("BARK_URL") or
+                        notification_config.get("SLACK_WEBHOOK_URL") or
+                        notification_config.get("GENERIC_WEBHOOK_URL") or
+                        (notification_config.get("EMAIL_FROM") and notification_config.get("EMAIL_TO"))
+                    )
+                    
+                    if not has_configured_channels:
+                        print(f"[重要新闻推送] 未配置任何推送渠道，跳过推送")
+                    else:
+                        # 创建内容分批函数
+                        def split_content_func(content: str, size: int):
+                            """内容分批函数"""
+                            if not content:
+                                return []
+                            content_bytes = content.encode('utf-8')
+                            batches = []
+                            for i in range(0, len(content_bytes), size):
+                                batch_bytes = content_bytes[i:i+size]
+                                try:
+                                    batch = batch_bytes.decode('utf-8')
+                                except UnicodeDecodeError:
+                                    # 如果截断位置不完整，向前查找完整字符
+                                    for j in range(len(batch_bytes) - 1, max(0, len(batch_bytes) - 4), -1):
+                                        try:
+                                            batch = batch_bytes[:j].decode('utf-8')
+                                            break
+                                        except UnicodeDecodeError:
+                                            continue
+                                    else:
+                                        batch = batch_bytes.decode('utf-8', errors='ignore')
+                                batches.append(batch)
+                            return batches
+                        
+                        # 推送到所有配置的渠道（同步执行）
+                        results = send_important_news_to_all_channels(
+                            important_news=important_news,
+                            notification_config=notification_config,
+                            get_time_func=get_time_func,
+                            split_content_func=split_content_func,
+                        )
+                        
+                        # 输出推送结果
+                        success_count = sum(1 for success in results.values() if success)
+                        total_count = len(results)
+                        print(f"[重要新闻推送] 推送完成：{success_count}/{total_count} 个渠道成功")
+                        for channel, success in results.items():
+                            status = "✅" if success else "❌"
+                            print(f"[重要新闻推送] {status} {channel}")
+                except Exception as e:
+                    print(f"[重要新闻推送] 推送重要新闻时出错: {e}")
+                    import traceback
+                    traceback.print_exc()
+                
+        except Exception as e:
+            print(f"[重要性分析] 分析失败: {e}")
+            import traceback
+            traceback.print_exc()
 
     def get_today_all_data(self, date: Optional[str] = None) -> Optional[NewsData]:
         """获取指定日期的所有新闻数据（合并后）"""

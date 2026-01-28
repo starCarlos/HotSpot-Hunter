@@ -236,11 +236,57 @@ def load_frequency_words(
     return processed_groups, filter_words, global_filters
 
 
+def load_blocked_words(
+    blocked_file: Optional[str] = None,
+) -> List[Dict]:
+    """
+    加载屏蔽词配置
+
+    配置文件格式说明：
+    - 每行一个屏蔽词
+    - 支持普通词和正则表达式（/pattern/ 语法）
+    - 以 # 开头的行会被忽略（注释）
+    - 空行会被忽略
+
+    Args:
+        blocked_file: 屏蔽词配置文件路径，默认从环境变量 BLOCKED_WORDS_PATH 获取或使用 config/blocked_words.txt
+
+    Returns:
+        屏蔽词列表（字典格式，包含 word, is_regex, pattern 等字段）
+
+    Raises:
+        FileNotFoundError: 屏蔽词文件不存在（可选，如果文件不存在返回空列表）
+    """
+    if blocked_file is None:
+        blocked_file = os.environ.get(
+            "BLOCKED_WORDS_PATH", "config/blocked_words.txt"
+        )
+
+    blocked_path = Path(blocked_file)
+    if not blocked_path.exists():
+        # 文件不存在时返回空列表，不抛出异常（可选配置）
+        return []
+
+    blocked_words = []
+    with open(blocked_path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            # 忽略空行和注释行
+            if not line or line.startswith("#"):
+                continue
+            # 解析词（支持正则表达式）
+            parsed = _parse_word(line)
+            blocked_words.append(parsed)
+
+    return blocked_words
+
+
 def matches_word_groups(
     title: str,
     word_groups: List[Dict],
     filter_words: List,
-    global_filters: Optional[List[str]] = None
+    global_filters: Optional[List[str]] = None,
+    blocked_words: Optional[List[Dict]] = None
 ) -> bool:
     """
     检查标题是否匹配词组规则
@@ -250,6 +296,7 @@ def matches_word_groups(
         word_groups: 词组列表
         filter_words: 过滤词列表（可以是字符串列表或字典列表）
         global_filters: 全局过滤词列表
+        blocked_words: 屏蔽词列表（字典格式，包含 word, is_regex, pattern 等字段）
 
     Returns:
         是否匹配
@@ -262,7 +309,13 @@ def matches_word_groups(
 
     title_lower = title.lower()
 
-    # 全局过滤检查（优先级最高）
+    # 屏蔽词检查（优先级最高）
+    if blocked_words:
+        for blocked_item in blocked_words:
+            if _word_matches(blocked_item, title_lower):
+                return False
+
+    # 全局过滤检查（优先级第二）
     if global_filters:
         if any(global_word.lower() in title_lower for global_word in global_filters):
             return False

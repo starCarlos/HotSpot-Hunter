@@ -29,8 +29,8 @@ CREATE TABLE IF NOT EXISTS rss_items (
     published_at TEXT,                        -- RSS 发布时间（ISO 格式）
     summary TEXT,                             -- 摘要/描述
     author TEXT,                              -- 作者
-    first_crawl_time TEXT NOT NULL,           -- 首次抓取时间
-    last_crawl_time TEXT NOT NULL,            -- 最后抓取时间
+    first_crawl_time INTEGER NOT NULL,        -- 首次抓取时间（Unix 时间戳）
+    last_crawl_time INTEGER NOT NULL,         -- 最后抓取时间（Unix 时间戳）
     crawl_count INTEGER DEFAULT 1,            -- 抓取次数
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -43,7 +43,7 @@ CREATE TABLE IF NOT EXISTS rss_items (
 -- ============================================
 CREATE TABLE IF NOT EXISTS rss_crawl_records (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    crawl_time TEXT NOT NULL UNIQUE,          -- 抓取时间（HH:MM）
+    crawl_time INTEGER NOT NULL UNIQUE,       -- 抓取时间（Unix 时间戳）
     total_items INTEGER DEFAULT 0,            -- 总条目数
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );

@@ -2,7 +2,8 @@
 const API_BASE = '/api/filtered-news';
 
 // 状态管理
-let currentDate = new Date().toISOString().split('T')[0];
+let startDate = '';
+let endDate = '';
 let currentCategory = '';
 let currentKeyword = '';
 let currentImportance = '';
@@ -11,6 +12,20 @@ let keywords = []; // 所有关键词列表（不随筛选变化）
 let allKeywords = []; // 保存所有关键词，用于在切换筛选时恢复
 let importanceStats = {};
 let savedKeyword = ''; // 保存切换重要性时之前选中的关键词
+
+// 获取本月第一天和今天的日期
+function getCurrentMonthRange() {
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = now.getMonth();
+    const firstDay = new Date(year, month, 1);
+    const today = new Date();
+    
+    return {
+        start: firstDay.toISOString().split('T')[0],
+        end: today.toISOString().split('T')[0]
+    };
+}
 
 // 初始化
 document.addEventListener('DOMContentLoaded', () => {
@@ -23,12 +38,84 @@ document.addEventListener('DOMContentLoaded', () => {
 
 // 初始化日期选择器
 function initDatePicker() {
-    const datePicker = document.getElementById('datePicker');
-    datePicker.value = currentDate;
-    datePicker.max = new Date().toISOString().split('T')[0];
+    const startDateInput = document.getElementById('startDate');
+    const endDateInput = document.getElementById('endDate');
     
-    datePicker.addEventListener('change', (e) => {
-        currentDate = e.target.value;
+    // 设置默认值：本月1号到今天
+    const monthRange = getCurrentMonthRange();
+    startDate = monthRange.start;
+    endDate = monthRange.end;
+    
+    startDateInput.value = startDate;
+    endDateInput.value = endDate;
+    
+    // 设置最大日期为今天
+    const today = new Date().toISOString().split('T')[0];
+    startDateInput.max = today;
+    endDateInput.max = today;
+    
+    // 开始日期变化时，限制结束日期范围
+    startDateInput.addEventListener('change', (e) => {
+        const selectedStart = e.target.value;
+        if (!selectedStart) return;
+        
+        // 获取选中日期的月份
+        const startDateObj = new Date(selectedStart);
+        const year = startDateObj.getFullYear();
+        const month = startDateObj.getMonth();
+        
+        // 计算该月的第一天和最后一天
+        const firstDay = new Date(year, month, 1);
+        const lastDay = new Date(year, month + 1, 0);
+        const todayObj = new Date();
+        
+        // 结束日期不能早于开始日期，不能晚于该月最后一天或今天（取较小值）
+        const maxEndDate = lastDay > todayObj ? todayObj : lastDay;
+        const minEndDate = firstDay > new Date(selectedStart) ? firstDay : new Date(selectedStart);
+        
+        endDateInput.min = minEndDate.toISOString().split('T')[0];
+        endDateInput.max = maxEndDate.toISOString().split('T')[0];
+        
+        // 如果当前结束日期不在范围内，自动调整
+        const currentEnd = new Date(endDateInput.value);
+        if (currentEnd < minEndDate || currentEnd > maxEndDate) {
+            endDateInput.value = maxEndDate.toISOString().split('T')[0];
+        }
+        
+        startDate = selectedStart;
+        endDate = endDateInput.value;
+        loadNews();
+    });
+    
+    // 结束日期变化时，限制开始日期范围
+    endDateInput.addEventListener('change', (e) => {
+        const selectedEnd = e.target.value;
+        if (!selectedEnd) return;
+        
+        // 获取选中日期的月份
+        const endDateObj = new Date(selectedEnd);
+        const year = endDateObj.getFullYear();
+        const month = endDateObj.getMonth();
+        
+        // 计算该月的第一天
+        const firstDay = new Date(year, month, 1);
+        const todayObj = new Date();
+        
+        // 开始日期不能晚于结束日期，不能早于该月第一天
+        const minStartDate = firstDay;
+        const maxStartDate = endDateObj > todayObj ? todayObj : endDateObj;
+        
+        startDateInput.min = minStartDate.toISOString().split('T')[0];
+        startDateInput.max = maxStartDate.toISOString().split('T')[0];
+        
+        // 如果当前开始日期不在范围内，自动调整
+        const currentStart = new Date(startDateInput.value);
+        if (currentStart < minStartDate || currentStart > maxStartDate) {
+            startDateInput.value = minStartDate.toISOString().split('T')[0];
+        }
+        
+        startDate = startDateInput.value;
+        endDate = selectedEnd;
         loadNews();
     });
 }
@@ -106,9 +193,15 @@ async function loadNews() {
     newsList.innerHTML = '<div class="loading">加载中...</div>';
 
     try {
-        const params = new URLSearchParams({
-            date: currentDate
-        });
+        const params = new URLSearchParams();
+        
+        // 添加日期范围参数
+        if (startDate) {
+            params.append('start_date', startDate);
+        }
+        if (endDate) {
+            params.append('end_date', endDate);
+        }
 
         // 添加筛选参数
         if (currentCategory) {
@@ -366,11 +459,24 @@ function renderNews(news) {
     }).join('');
 }
 
-// 格式化时间
+// 格式化时间（将 Unix 时间戳转换为 YYYY-MM-DD HH:MM:SS 格式）
 function formatTime(timeStr) {
     if (!timeStr) return '';
     
-    // 处理 HH-MM 格式
+    // 如果是 Unix 时间戳（数字字符串）
+    const timestamp = parseInt(timeStr);
+    if (!isNaN(timestamp) && timestamp > 0) {
+        const date = new Date(timestamp * 1000); // Unix 时间戳是秒，需要乘以 1000
+        const year = date.getFullYear();
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const day = String(date.getDate()).padStart(2, '0');
+        const hours = String(date.getHours()).padStart(2, '0');
+        const minutes = String(date.getMinutes()).padStart(2, '0');
+        const seconds = String(date.getSeconds()).padStart(2, '0');
+        return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+    }
+    
+    // 处理 HH-MM 格式（向后兼容）
     if (timeStr.includes('-') && timeStr.length === 5) {
         return timeStr.replace('-', ':');
     }

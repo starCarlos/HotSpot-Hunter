@@ -96,6 +96,18 @@ body {
     border-color: var(--accent-color);
 }
 
+.date-range-picker {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.date-label {
+    font-size: 13px;
+    color: var(--text-secondary);
+    white-space: nowrap;
+}
+
 .date-picker {
     padding: 8px 12px;
     border: 1px solid var(--border-color);
@@ -105,9 +117,15 @@ body {
     background: var(--bg-secondary);
     color: var(--text-primary);
     transition: border-color 0.3s;
+    width: 140px;
 }
 
 .date-picker:hover {
+    border-color: var(--accent-color);
+}
+
+.date-picker:focus {
+    outline: none;
     border-color: var(--accent-color);
 }
 

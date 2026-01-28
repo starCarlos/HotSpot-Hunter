@@ -46,8 +46,8 @@ class SQLiteStorageMixin:
         pass
 
     @abstractmethod
-    def _format_time_filename(self) -> str:
-        """格式化时间文件名 (格式: HH-MM)"""
+    def _format_time_filename(self) -> int:
+        """获取时间戳（Unix 时间戳，用于数据库存储）"""
         pass
 
     def _format_full_date(self, date: Optional[str] = None) -> str:
@@ -166,54 +166,111 @@ class SQLiteStorageMixin:
             for source_id, news_list in data.items.items():
                 success_sources.append(source_id)
 
+                # 在保存前先对同一批次的数据去重（按 title 去重，保留第一个）
+                seen_titles = set()
+                unique_news_list = []
                 for item in news_list:
+                    if item.title not in seen_titles:
+                        seen_titles.add(item.title)
+                        unique_news_list.append(item)
+                
+                for item in unique_news_list:
                     try:
                         # 标准化 URL（去除动态参数，如微博的 band_rank）
                         normalized_url = normalize_url(item.url, source_id) if item.url else ""
 
-                        # 首先检查是否存在相同标题的记录（跨平台去重）
+                        # 检查是否存在相同标题和平台的记录
                         cursor.execute("""
-                            SELECT id, title, platform_id, url FROM news_items
-                            WHERE title = ?
-                        """, (item.title,))
-                        existing_by_title = cursor.fetchall()
+                            SELECT id, first_crawl_time, crawl_count, rank, url, mobile_url, last_crawl_time
+                            FROM news_items
+                            WHERE title = ? AND platform_id = ?
+                        """, (item.title, source_id))
+                        existing_record = cursor.fetchone()
 
-                        # 删除所有相同标题的旧记录
-                        if existing_by_title:
-                            for old_record in existing_by_title:
-                                old_id = old_record[0]
-                                # 删除关联的排名历史
+                        if existing_record:
+                            # 更新现有记录，保留 first_crawl_time
+                            existing_id, existing_first_time, existing_count, existing_rank, existing_url, existing_mobile_url, existing_last_crawl_time = existing_record
+                            
+                            # 检查数据是否完全相同（排名、URL都相同）
+                            is_duplicate = (
+                                existing_rank == item.rank and
+                                existing_url == normalized_url and
+                                existing_mobile_url == item.mobile_url
+                            )
+                            
+                            if is_duplicate:
+                                # 数据完全相同，不更新抓取时间和计数，也不记录排名历史
+                                # 只更新 updated_at 字段
                                 cursor.execute("""
-                                    DELETE FROM rank_history WHERE news_item_id = ?
-                                """, (old_id,))
-                                # 删除关联的标题变更记录
+                                    UPDATE news_items
+                                    SET updated_at = ?
+                                    WHERE id = ?
+                                """, (now_str, existing_id))
+                            else:
+                                # 数据有变化，正常更新
                                 cursor.execute("""
-                                    DELETE FROM title_changes WHERE news_item_id = ?
-                                """, (old_id,))
-                                # 删除新闻条目
+                                    UPDATE news_items
+                                    SET rank = ?,
+                                        url = ?,
+                                        mobile_url = ?,
+                                        last_crawl_time = ?,
+                                        crawl_count = ?,
+                                        updated_at = ?
+                                    WHERE id = ?
+                                """, (item.rank, normalized_url, item.mobile_url,
+                                      data.crawl_time, existing_count + 1, now_str, existing_id))
+                                
+                                # 记录排名历史
                                 cursor.execute("""
-                                    DELETE FROM news_items WHERE id = ?
-                                """, (old_id,))
+                                    INSERT INTO rank_history
+                                    (news_item_id, rank, crawl_time, created_at)
+                                    VALUES (?, ?, ?, ?)
+                                """, (existing_id, item.rank, data.crawl_time, now_str))
+                            updated_count += 1
+                        else:
+                            # 检查是否存在相同标题但不同平台的记录（跨平台去重）
+                            cursor.execute("""
+                                SELECT id FROM news_items
+                                WHERE title = ? AND platform_id != ?
+                            """, (item.title, source_id))
+                            existing_by_title = cursor.fetchall()
 
-                        # 插入新记录（存储标准化后的 URL）
-                        cursor.execute("""
-                            INSERT INTO news_items
-                            (title, platform_id, rank, url, mobile_url,
-                             first_crawl_time, last_crawl_time, crawl_count,
-                             created_at, updated_at)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
-                        """, (item.title, source_id, item.rank, normalized_url,
-                              item.mobile_url, data.crawl_time, data.crawl_time,
-                              now_str, now_str))
-                        new_id = cursor.lastrowid
+                            # 删除所有相同标题但不同平台的旧记录（跨平台去重）
+                            if existing_by_title:
+                                for old_record in existing_by_title:
+                                    old_id = old_record[0]
+                                    # 删除关联的排名历史
+                                    cursor.execute("""
+                                        DELETE FROM rank_history WHERE news_item_id = ?
+                                    """, (old_id,))
+                                    # 删除关联的标题变更记录
+                                    cursor.execute("""
+                                        DELETE FROM title_changes WHERE news_item_id = ?
+                                    """, (old_id,))
+                                    # 删除新闻条目
+                                    cursor.execute("""
+                                        DELETE FROM news_items WHERE id = ?
+                                    """, (old_id,))
 
-                        # 记录初始排名
-                        cursor.execute("""
-                            INSERT INTO rank_history
-                            (news_item_id, rank, crawl_time, created_at)
-                            VALUES (?, ?, ?, ?)
-                        """, (new_id, item.rank, data.crawl_time, now_str))
-                        new_count += 1
+                            # 插入新记录（存储标准化后的 URL）
+                            cursor.execute("""
+                                INSERT INTO news_items
+                                (title, platform_id, rank, url, mobile_url,
+                                 first_crawl_time, last_crawl_time, crawl_count,
+                                 created_at, updated_at)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+                            """, (item.title, source_id, item.rank, normalized_url,
+                                  item.mobile_url, data.crawl_time, data.crawl_time,
+                                  now_str, now_str))
+                            new_id = cursor.lastrowid
+
+                            # 记录初始排名
+                            cursor.execute("""
+                                INSERT INTO rank_history
+                                (news_item_id, rank, crawl_time, created_at)
+                                VALUES (?, ?, ?, ?)
+                            """, (new_id, item.rank, data.crawl_time, now_str))
+                            new_count += 1
 
                     except sqlite3.Error as e:
                         print(f"{log_prefix} 保存新闻条目失败 [{item.title[:30]}...]: {e}")
@@ -326,13 +383,22 @@ class SQLiteStorageMixin:
             cursor = conn.cursor()
 
             # 获取所有新闻数据（包含 id 用于查询排名历史）
+            # 使用窗口函数去重：对于相同的 (title, platform_id)，只选择 last_crawl_time 最大的记录
             cursor.execute("""
                 SELECT n.id, n.title, n.platform_id, p.name as platform_name,
                        n.rank, n.url, n.mobile_url,
                        n.first_crawl_time, n.last_crawl_time, n.crawl_count,
                        n.importance
-                FROM news_items n
+                FROM (
+                    SELECT *,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY title, platform_id 
+                               ORDER BY last_crawl_time DESC
+                           ) as rn
+                    FROM news_items
+                ) n
                 LEFT JOIN platforms p ON n.platform_id = p.id
+                WHERE n.rn = 1
                 ORDER BY n.platform_id, n.last_crawl_time
             """)
 
@@ -370,8 +436,9 @@ class SQLiteStorageMixin:
                     # 构建 rank_timeline 列表（完整时间线，包含脱榜）
                     if news_id not in rank_timeline_map:
                         rank_timeline_map[news_id] = []
-                    # 提取时间部分（HH:MM）
-                    time_part = crawl_time.split()[1][:5] if ' ' in crawl_time else crawl_time[:5]
+                    # 将时间戳转换为显示格式（HH:MM）
+                    from app.utils.time import timestamp_to_time_display
+                    time_part = timestamp_to_time_display(crawl_time, self.timezone) if isinstance(crawl_time, int) else str(crawl_time)
                     rank_timeline_map[news_id].append({
                         "time": time_part,
                         "rank": rank if rank != 0 else None  # 0 转为 None 表示脱榜
@@ -398,6 +465,10 @@ class SQLiteStorageMixin:
                 ranks = rank_history_map.get(news_id, [row[4]])
                 rank_timeline = rank_timeline_map.get(news_id, [])
 
+                # 将时间戳转换为字符串（保持兼容性）
+                first_time_str = str(row[7]) if isinstance(row[7], int) else row[7]  # first_crawl_time
+                last_time_str = str(row[8]) if isinstance(row[8], int) else row[8]    # last_crawl_time
+                
                 items[platform_id].append(NewsItem(
                     title=title,
                     source_id=platform_id,
@@ -405,10 +476,10 @@ class SQLiteStorageMixin:
                     rank=row[4],
                     url=row[5] or "",
                     mobile_url=row[6] or "",
-                    crawl_time=row[8],  # last_crawl_time
+                    crawl_time=last_time_str,  # last_crawl_time
                     ranks=ranks,
-                    first_time=row[7],  # first_crawl_time
-                    last_time=row[8],   # last_crawl_time
+                    first_time=first_time_str,  # first_crawl_time
+                    last_time=last_time_str,   # last_crawl_time
                     count=row[9],       # crawl_count
                     rank_timeline=rank_timeline,
                 ))
@@ -474,14 +545,23 @@ class SQLiteStorageMixin:
             latest_time = time_row[0]
 
             # 获取该时间的新闻数据（包含 id 用于查询排名历史）
+            # 使用窗口函数去重：对于相同的 (title, platform_id)，只选择 last_crawl_time 最大的记录
             cursor.execute("""
                 SELECT n.id, n.title, n.platform_id, p.name as platform_name,
                        n.rank, n.url, n.mobile_url,
                        n.first_crawl_time, n.last_crawl_time, n.crawl_count,
                        n.importance
-                FROM news_items n
+                FROM (
+                    SELECT *,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY title, platform_id 
+                               ORDER BY last_crawl_time DESC
+                           ) as rn
+                    FROM news_items
+                    WHERE last_crawl_time = ?
+                ) n
                 LEFT JOIN platforms p ON n.platform_id = p.id
-                WHERE n.last_crawl_time = ?
+                WHERE n.rn = 1
             """, (latest_time,))
 
             rows = cursor.fetchall()
@@ -518,8 +598,9 @@ class SQLiteStorageMixin:
                     # 构建 rank_timeline 列表（完整时间线，包含脱榜）
                     if news_id not in rank_timeline_map:
                         rank_timeline_map[news_id] = []
-                    # 提取时间部分（HH:MM）
-                    time_part = crawl_time.split()[1][:5] if ' ' in crawl_time else crawl_time[:5]
+                    # 将时间戳转换为显示格式（HH:MM）
+                    from app.utils.time import timestamp_to_time_display
+                    time_part = timestamp_to_time_display(crawl_time, self.timezone) if isinstance(crawl_time, int) else str(crawl_time)
                     rank_timeline_map[news_id].append({
                         "time": time_part,
                         "rank": rank if rank != 0 else None  # 0 转为 None 表示脱榜
@@ -543,6 +624,10 @@ class SQLiteStorageMixin:
                 ranks = rank_history_map.get(news_id, [row[4]])
                 rank_timeline = rank_timeline_map.get(news_id, [])
 
+                # 将时间戳转换为字符串（保持兼容性）
+                first_time_str = str(row[7]) if isinstance(row[7], int) else row[7]  # first_crawl_time
+                last_time_str = str(row[8]) if isinstance(row[8], int) else row[8]    # last_crawl_time
+                
                 items[platform_id].append(NewsItem(
                     title=row[1],
                     source_id=platform_id,
@@ -550,10 +635,10 @@ class SQLiteStorageMixin:
                     rank=row[4],
                     url=row[5] or "",
                     mobile_url=row[6] or "",
-                    crawl_time=row[8],  # last_crawl_time
+                    crawl_time=last_time_str,  # last_crawl_time
                     ranks=ranks,
-                    first_time=row[7],  # first_crawl_time
-                    last_time=row[8],   # last_crawl_time
+                    first_time=first_time_str,  # first_crawl_time
+                    last_time=last_time_str,   # last_crawl_time
                     count=row[9],       # crawl_count
                     rank_timeline=rank_timeline,
                 ))
@@ -604,8 +689,8 @@ class SQLiteStorageMixin:
                     new_titles[source_id] = {item.title: item for item in news_list}
                 return new_titles
 
-            # 获取当前批次时间
-            current_time = current_data.crawl_time
+            # 获取当前批次时间（转换为整数时间戳进行比较）
+            current_time = int(current_data.crawl_time) if isinstance(current_data.crawl_time, str) else current_data.crawl_time
 
             # 收集历史标题（first_time < current_time 的标题）
             # 这样可以正确处理同一标题因 URL 变化而产生多条记录的情况
@@ -614,7 +699,9 @@ class SQLiteStorageMixin:
                 historical_titles[source_id] = set()
                 for item in news_list:
                     first_time = getattr(item, 'first_time', item.crawl_time)
-                    if first_time < current_time:
+                    # 转换为整数时间戳进行比较
+                    first_time_int = int(first_time) if isinstance(first_time, str) else first_time
+                    if first_time_int < current_time:
                         historical_titles[source_id].add(item.title)
 
             # 检查是否有历史数据
@@ -952,6 +1039,10 @@ class SQLiteStorageMixin:
                 if feed_id not in items:
                     items[feed_id] = []
 
+                # 将时间戳转换为字符串（保持兼容性）
+                first_time_str = str(row[8]) if isinstance(row[8], int) else row[8]  # first_crawl_time
+                last_time_str = str(row[9]) if isinstance(row[9], int) else row[9]    # last_crawl_time
+
                 items[feed_id].append(RSSItem(
                     title=row[1],
                     feed_id=feed_id,
@@ -960,9 +1051,9 @@ class SQLiteStorageMixin:
                     published_at=row[5] or "",
                     summary=row[6] or "",
                     author=row[7] or "",
-                    crawl_time=row[9],
-                    first_time=row[8],
-                    last_time=row[9],
+                    crawl_time=last_time_str,
+                    first_time=first_time_str,
+                    last_time=last_time_str,
                     count=row[10],
                 ))
 
@@ -1017,8 +1108,8 @@ class SQLiteStorageMixin:
                 # 没有历史数据，所有都是新的
                 return current_data.items.copy()
 
-            # 获取当前批次时间
-            current_time = current_data.crawl_time
+            # 获取当前批次时间（转换为整数时间戳进行比较）
+            current_time = int(current_data.crawl_time) if isinstance(current_data.crawl_time, str) else current_data.crawl_time
 
             # 收集历史 URL（first_time < current_time 的条目）
             historical_urls: Dict[str, set] = {}
@@ -1026,7 +1117,9 @@ class SQLiteStorageMixin:
                 historical_urls[feed_id] = set()
                 for item in rss_list:
                     first_time = getattr(item, 'first_time', item.crawl_time)
-                    if first_time < current_time:
+                    # 转换为整数时间戳进行比较
+                    first_time_int = int(first_time) if isinstance(first_time, str) else first_time
+                    if first_time_int < current_time:
                         if item.url:
                             historical_urls[feed_id].add(item.url)
 
@@ -1109,6 +1202,10 @@ class SQLiteStorageMixin:
                 if feed_id not in items:
                     items[feed_id] = []
 
+                # 将时间戳转换为字符串（保持兼容性）
+                first_time_str = str(row[8]) if isinstance(row[8], int) else row[8]  # first_crawl_time
+                last_time_str = str(row[9]) if isinstance(row[9], int) else row[9]    # last_crawl_time
+
                 items[feed_id].append(RSSItem(
                     title=row[1],
                     feed_id=feed_id,
@@ -1117,9 +1214,9 @@ class SQLiteStorageMixin:
                     published_at=row[5] or "",
                     summary=row[6] or "",
                     author=row[7] or "",
-                    crawl_time=row[9],
-                    first_time=row[8],
-                    last_time=row[9],
+                    crawl_time=last_time_str,
+                    first_time=first_time_str,
+                    last_time=last_time_str,
                     count=row[10],
                 ))
 

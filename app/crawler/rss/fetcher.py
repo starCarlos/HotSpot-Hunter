@@ -148,8 +148,8 @@ class RSSFetcher:
                 parsed_items = parsed_items[:feed.max_items]
 
             # 转换为 RSSItem（使用配置的时区）
-            now = get_configured_time(self.timezone)
-            crawl_time = now.strftime("%H:%M")
+            from app.utils.time import get_timestamp
+            crawl_time = get_timestamp(self.timezone)  # Unix 时间戳
             items = []
 
             for parsed in parsed_items:
@@ -206,7 +206,8 @@ class RSSFetcher:
 
         # 使用配置的时区
         now = get_configured_time(self.timezone)
-        crawl_time = now.strftime("%H:%M")
+        from app.utils.time import get_timestamp
+        crawl_time = get_timestamp(self.timezone)  # Unix 时间戳
         crawl_date = now.strftime("%Y-%m-%d")
 
         print(f"[RSS] 开始抓取 {len(self.feeds)} 个 RSS 源...")

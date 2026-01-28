@@ -22,12 +22,12 @@ class NewsItem:
     rank: int = 0                       # 排名
     url: str = ""                       # 链接 URL
     mobile_url: str = ""                # 移动端 URL
-    crawl_time: str = ""                # 抓取时间（HH:MM 格式）
+    crawl_time: str = ""                # 抓取时间（Unix 时间戳字符串）
 
     # 统计信息（用于分析）
     ranks: List[int] = field(default_factory=list)  # 历史排名列表
-    first_time: str = ""                # 首次出现时间
-    last_time: str = ""                 # 最后出现时间
+    first_time: str = ""                # 首次出现时间（Unix 时间戳字符串）
+    last_time: str = ""                 # 最后出现时间（Unix 时间戳字符串）
     count: int = 1                      # 出现次数
     rank_timeline: List[Dict[str, Any]] = field(default_factory=list)  # 完整排名时间线
                                         # 格式: [{"time": "09:30", "rank": 1}, {"time": "10:00", "rank": 2}, ...]
@@ -80,11 +80,11 @@ class RSSItem:
     published_at: str = ""              # RSS 发布时间（ISO 格式）
     summary: str = ""                   # 摘要/描述
     author: str = ""                    # 作者
-    crawl_time: str = ""                # 抓取时间（HH:MM 格式）
+    crawl_time: str = ""                # 抓取时间（Unix 时间戳字符串）
 
     # 统计信息
-    first_time: str = ""                # 首次抓取时间
-    last_time: str = ""                 # 最后抓取时间
+    first_time: str = ""                # 首次抓取时间（Unix 时间戳字符串）
+    last_time: str = ""                 # 最后抓取时间（Unix 时间戳字符串）
     count: int = 1                      # 抓取次数
 
     def to_dict(self) -> Dict[str, Any]:
@@ -475,31 +475,35 @@ def convert_crawl_results_to_news_data(
     crawl_date: str,
 ) -> NewsData:
     """
-    将爬虫结果转换为 NewsData 格式，并对当次查询的数据按标题去重
+    将爬虫结果转换为 NewsData 格式，并对每个平台内的数据按标题去重
 
     Args:
         results: 爬虫返回的结果 {source_id: {title: {ranks: [], url: "", mobileUrl: ""}}}
         id_to_name: 来源ID到名称的映射
         failed_ids: 失败的来源ID
-        crawl_time: 抓取时间（HH:MM）
+        crawl_time: 抓取时间（Unix 时间戳）
         crawl_date: 抓取日期（YYYY-MM-DD）
 
     Returns:
-        NewsData 对象
+        NewsData 对象（已按平台内标题去重）
     """
     items = {}
 
-    # 第一步：收集所有标题，按标题去重（跨平台）
-    # 使用字典记录每个标题第一次出现的完整信息
-    title_map = {}
-
+    # 按平台处理数据，每个平台内按标题去重
     for source_id, titles_data in results.items():
         source_name = id_to_name.get(source_id, source_id)
+        
+        if source_id not in items:
+            items[source_id] = []
+        
+        # 用于记录该平台内已处理的标题（平台内去重）
+        seen_titles = set()
 
         for title, data in titles_data.items():
-            # 如果标题已存在，跳过（保留第一次出现的）
-            if title in title_map:
+            # 平台内去重：如果该平台内已存在相同标题，跳过
+            if title in seen_titles:
                 continue
+            seen_titles.add(title)
 
             if isinstance(data, dict):
                 ranks = data.get("ranks", [])
@@ -513,37 +517,20 @@ def convert_crawl_results_to_news_data(
 
             rank = ranks[0] if ranks else 99
 
-            # 记录标题的完整信息
-            title_map[title] = {
-                "source_id": source_id,
-                "source_name": source_name,
-                "rank": rank,
-                "ranks": ranks,
-                "url": url,
-                "mobile_url": mobile_url,
-            }
-
-    # 第二步：按平台重新组织去重后的数据
-    for title, info in title_map.items():
-        source_id = info["source_id"]
-
-        if source_id not in items:
-            items[source_id] = []
-
-        news_item = NewsItem(
-            title=title,
-            source_id=source_id,
-            source_name=info["source_name"],
-            rank=info["rank"],
-            url=info["url"],
-            mobile_url=info["mobile_url"],
-            crawl_time=crawl_time,
-            ranks=info["ranks"],
-            first_time=crawl_time,
-            last_time=crawl_time,
-            count=1,
-        )
-        items[source_id].append(news_item)
+            news_item = NewsItem(
+                title=title,
+                source_id=source_id,
+                source_name=source_name,
+                rank=rank,
+                url=url,
+                mobile_url=mobile_url,
+                crawl_time=crawl_time,
+                ranks=ranks,
+                first_time=crawl_time,
+                last_time=crawl_time,
+                count=1,
+            )
+            items[source_id].append(news_item)
 
     return NewsData(
         date=crawl_date,

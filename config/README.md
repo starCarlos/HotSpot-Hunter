@@ -21,8 +21,9 @@
 
 1. **AI配置**: `config/ai_config.yaml` - AI模型配置（用于新闻重要性分析）
 2. **关键词配置**: `config/frequency_words.txt` - 关键词和敏感词配置（用于新闻筛选）
-3. **平台类型配置**: `config/platform_types.yaml` - 平台分类配置
-4. **推送配置**: `config/notification_config.yaml` - 推送渠道配置（可选）
+3. **屏蔽词配置**: `config/blocked_words.txt` - 屏蔽词配置（用于过滤不想看到的内容）
+4. **平台类型配置**: `config/platform_types.yaml` - 平台分类配置
+5. **推送配置**: `config/notification_config.yaml` - 推送渠道配置（可选）
 
 ---
 
@@ -106,6 +107,47 @@ cp config/frequency_words.txt.example config/frequency_words.txt
 
 ```bash
 export FREQUENCY_WORDS_PATH="/path/to/frequency_words.txt"
+```
+
+---
+
+## 屏蔽词配置
+
+### 配置文件位置
+
+`config/blocked_words.txt`
+
+### 配置方式
+
+1. 复制示例文件：
+```bash
+cp config/blocked_words.txt.example config/blocked_words.txt
+```
+
+2. 编辑配置文件，添加你不想看到的屏蔽词
+
+### 配置文件格式
+
+详细格式说明请参考 `config/blocked_words.txt.example` 文件中的注释。
+
+主要语法：
+- **普通词**：每行一个，直接写入
+- **`/pattern/`**：正则表达式（用 `/.../` 包裹）
+- **`#`**：注释行，以 `#` 开头的行会被忽略
+
+### 使用说明
+
+- 屏蔽词会在关键词筛选之前进行检查，优先级最高
+- 包含屏蔽词的新闻会被自动排除，不会出现在推送和筛选结果中
+- 支持普通词和正则表达式两种格式
+- 配置文件不存在时不会报错，系统会跳过屏蔽词过滤
+
+### 环境变量配置
+
+可以通过环境变量指定配置文件路径：
+
+```bash
+export BLOCKED_WORDS_PATH="/path/to/blocked_words.txt"
 ```
 
 ---
@@ -232,9 +274,12 @@ FEISHU_WEBHOOK_URL: "url1;url2;url3"
 
 2. **关键词配置**：`frequency_words.txt` 可能包含敏感词，已添加到 `.gitignore`，建议不提交到版本控制
 
+3. **屏蔽词配置**：`blocked_words.txt` 可能包含敏感词，已添加到 `.gitignore`，建议不提交到版本控制
+
 3. **配置文件路径**：
    - AI配置：可以通过环境变量 `AI_CONFIG_PATH` 指定自定义路径
    - 关键词配置：可以通过环境变量 `FREQUENCY_WORDS_PATH` 指定自定义路径
+   - 屏蔽词配置：可以通过环境变量 `BLOCKED_WORDS_PATH` 指定自定义路径
 
 4. **环境变量优先级**：环境变量会覆盖配置文件中的设置
 
@@ -259,6 +304,12 @@ FEISHU_WEBHOOK_URL: "url1;url2;url3"
 [警告] 关键词配置文件不存在: /path/to/config/frequency_words.txt，使用空配置
 ```
 
+### 屏蔽词配置
+如果配置加载失败，会显示：
+```
+[筛选] 屏蔽词配置文件不存在: /path/to/config/blocked_words.txt，跳过屏蔽词过滤
+```
+
 ### 平台类型配置
 如果配置加载失败，会显示：
 ```
@@ -278,6 +329,10 @@ cp config/ai_config.yaml.example config/ai_config.yaml
 # 关键词配置（可选，用于新闻筛选）
 cp config/frequency_words.txt.example config/frequency_words.txt
 # 编辑 config/frequency_words.txt，添加你的关键词规则
+
+# 屏蔽词配置（可选，用于过滤不想看到的内容）
+cp config/blocked_words.txt.example config/blocked_words.txt
+# 编辑 config/blocked_words.txt，添加你的屏蔽词
 
 # 推送配置（可选，用于推送通知）
 cp config/notification_config.yaml.example config/notification_config.yaml

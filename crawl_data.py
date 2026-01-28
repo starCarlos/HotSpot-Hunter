@@ -7,6 +7,9 @@
 
 import os
 import sys
+import time
+import random
+import json
 from pathlib import Path
 from typing import List, Dict, Tuple, Union
 
@@ -17,8 +20,8 @@ sys.path.insert(0, str(project_root))
 from app.crawler.fetcher import DataFetcher
 from app.storage.manager import get_storage_manager
 from app.storage.base import convert_crawl_results_to_news_data, NewsData, NewsItem
-from app.utils.time import get_configured_time
-from app.core.frequency import load_frequency_words, matches_word_groups
+from app.utils.time import get_configured_time, get_timestamp
+from app.core.frequency import load_frequency_words, load_blocked_words, matches_word_groups
 import yaml
 
 
@@ -130,51 +133,16 @@ def main():
     print(f"[抓取] 开始抓取 {len(platforms)} 个平台的数据...")
     print()
     
-    # 创建数据获取器
-    fetcher = DataFetcher()
-    
-    # 抓取数据（使用 (id, name) 元组）
-    request_interval = 100  # 100ms 间隔（可在配置中设置）
-    print(f"[抓取] 请求间隔: {request_interval} 毫秒")
-    results, id_to_name, failed_ids = fetcher.crawl_websites(
-        ids_list=platforms,
-        request_interval=request_interval,
-    )
-    
-    print()
-    print(f"[抓取] 完成：成功 {len(results)} 个，失败 {len(failed_ids)} 个")
-    if failed_ids:
-        print(f"[抓取] 失败的平台: {', '.join(failed_ids)}")
-    
-    if not results:
-        print("[错误] 没有抓取到任何数据，退出")
-        return 1
-    
-    # 获取当前时间
+    # 获取当前时间（所有平台共用）
     timezone = "Asia/Shanghai"
     now = get_configured_time(timezone)
-    crawl_time = now.strftime("%H:%M")
+    crawl_time = get_timestamp(timezone)  # Unix 时间戳
     crawl_date = now.strftime("%Y-%m-%d")
     
+    # 加载关键词和屏蔽词配置（所有平台共用）
     print()
-    print(f"[转换] 转换数据格式（日期: {crawl_date}, 时间: {crawl_time}）...")
+    print(f"[筛选] 加载关键词和屏蔽词配置...")
     
-    # 转换数据格式
-    news_data = convert_crawl_results_to_news_data(
-        results=results,
-        id_to_name=id_to_name,
-        failed_ids=failed_ids,
-        crawl_time=crawl_time,
-        crawl_date=crawl_date,
-    )
-    
-    print(f"[转换] 转换完成：共 {news_data.get_total_count()} 条新闻")
-    
-    # 关键词筛选（在入库前进行）
-    print()
-    print(f"[筛选] 开始关键词筛选...")
-    
-    # 加载关键词配置
     frequency_file = project_root / "config" / "frequency_words.txt"
     word_groups = []
     filter_words = []
@@ -186,85 +154,181 @@ def main():
             word_groups, filter_words, global_filters = load_frequency_words(
                 str(frequency_file)
             )
-            # 如果有配置词组、过滤词或全局过滤词，则启用筛选
             if word_groups or filter_words or global_filters:
                 use_filtering = True
                 print(f"[筛选] 已加载关键词配置：{len(word_groups)} 个词组，{len(filter_words)} 个过滤词，{len(global_filters)} 个全局过滤词")
-            else:
-                print(f"[筛选] 关键词配置文件存在但为空，保存所有新闻")
         except Exception as e:
             print(f"[警告] 加载关键词配置失败: {e}，将保存所有新闻")
-    else:
-        print(f"[筛选] 关键词配置文件不存在: {frequency_file}，将保存所有新闻")
     
-    # 如果启用筛选，进行筛选
-    if use_filtering:
-        filtered_items = {}
-        original_count = news_data.get_total_count()
-        
-        for platform_id, news_list in news_data.items.items():
-            filtered_list = []
-            for item in news_list:
-                # 检查标题是否匹配关键词规则
-                if matches_word_groups(item.title, word_groups, filter_words, global_filters):
-                    filtered_list.append(item)
-            
-            # 只保留有筛选结果的平台
-            if filtered_list:
-                filtered_items[platform_id] = filtered_list
-        
-        # 创建筛选后的 NewsData
-        filtered_news_data = NewsData(
-            date=news_data.date,
-            crawl_time=news_data.crawl_time,
-            items=filtered_items,
-            id_to_name=news_data.id_to_name,
-            failed_ids=news_data.failed_ids,
-        )
-        
-        filtered_count = filtered_news_data.get_total_count()
-        print(f"[筛选] 筛选完成：原始 {original_count} 条，筛选后 {filtered_count} 条，过滤 {original_count - filtered_count} 条")
-        
-        # 使用筛选后的数据
-        news_data = filtered_news_data
-    else:
-        print(f"[筛选] 未启用关键词筛选，保存所有新闻")
+    blocked_file = project_root / "config" / "blocked_words.txt"
+    blocked_words = []
+    if blocked_file.exists():
+        try:
+            blocked_words = load_blocked_words(str(blocked_file))
+            if blocked_words:
+                print(f"[筛选] 已加载屏蔽词配置：{len(blocked_words)} 个屏蔽词")
+        except Exception as e:
+            print(f"[警告] 加载屏蔽词配置失败: {e}")
     
-    # 保存数据
-    print()
-    print(f"[存储] 保存数据到存储后端...")
-    
+    # 创建数据获取器和存储管理器
+    fetcher = DataFetcher()
     storage_manager = get_storage_manager(
         backend_type="local",
         data_dir=data_dir,
-        enable_txt=False,  # 不保存 TXT 快照（API 项目不需要）
-        enable_html=False,  # 不保存 HTML 报告（API 项目不需要）
+        enable_txt=False,
+        enable_html=False,
         timezone=timezone,
     )
     
-    success = storage_manager.save_news_data(news_data)
+    # 请求间隔
+    request_interval = 100  # 100ms 间隔
+    print(f"[抓取] 请求间隔: {request_interval} 毫秒")
+    print()
     
-    if success:
-        print(f"[存储] 数据已保存到存储后端: {storage_manager.backend_name}")
+    # 统计信息
+    success_count = 0
+    failed_ids = []
+    total_news_count = 0
+    
+    # 逐个平台抓取并立即存储
+    for i, platform_info in enumerate(platforms):
+        if isinstance(platform_info, tuple):
+            platform_id, platform_name = platform_info
+        else:
+            platform_id = platform_info
+            platform_name = platform_id
+        
+        print(f"[抓取] [{i+1}/{len(platforms)}] 正在抓取 {platform_name} ({platform_id})...")
+        
+        # 抓取单个平台的数据
+        response, _, _ = fetcher.fetch_data(platform_info)
+        
+        if not response:
+            print(f"[抓取] {platform_name} 抓取失败")
+            failed_ids.append(platform_id)
+            # 请求间隔（除了最后一个）
+            if i < len(platforms) - 1:
+                actual_interval = request_interval + random.randint(-10, 20)
+                actual_interval = max(50, actual_interval)
+                time.sleep(actual_interval / 1000)
+            continue
+        
+        # 解析响应数据
+        try:
+            data = json.loads(response)
+            platform_results = {}
+            
+            for index, item in enumerate(data.get("items", []), 1):
+                title = item.get("title")
+                if title is None or isinstance(title, float) or not str(title).strip():
+                    continue
+                title = str(title).strip()
+                url = item.get("url", "")
+                mobile_url = item.get("mobileUrl", "")
+                
+                if title in platform_results:
+                    platform_results[title]["ranks"].append(index)
+                else:
+                    platform_results[title] = {
+                        "ranks": [index],
+                        "url": url,
+                        "mobileUrl": mobile_url,
+                    }
+            
+            if not platform_results:
+                print(f"[抓取] {platform_name} 没有抓取到数据")
+                failed_ids.append(platform_id)
+                continue
+            
+            # 转换数据格式（单个平台）
+            platform_news_data = convert_crawl_results_to_news_data(
+                results={platform_id: platform_results},
+                id_to_name={platform_id: platform_name},
+                failed_ids=[],
+                crawl_time=crawl_time,
+                crawl_date=crawl_date,
+            )
+            
+            # 关键词和屏蔽词筛选
+            if use_filtering or blocked_words:
+                filtered_items = {}
+                for pid, news_list in platform_news_data.items.items():
+                    filtered_list = []
+                    for item in news_list:
+                        if matches_word_groups(item.title, word_groups, filter_words, global_filters, blocked_words):
+                            filtered_list.append(item)
+                    if filtered_list:
+                        filtered_items[pid] = filtered_list
+                
+                if filtered_items:
+                    platform_news_data = NewsData(
+                        date=platform_news_data.date,
+                        crawl_time=platform_news_data.crawl_time,
+                        items=filtered_items,
+                        id_to_name=platform_news_data.id_to_name,
+                        failed_ids=platform_news_data.failed_ids,
+                    )
+                else:
+                    print(f"[筛选] {platform_name} 没有匹配的新闻，跳过保存")
+                    # 请求间隔
+                    if i < len(platforms) - 1:
+                        import time as time_module
+                        import random
+                        actual_interval = request_interval + random.randint(-10, 20)
+                        actual_interval = max(50, actual_interval)
+                        time_module.sleep(actual_interval / 1000)
+                    continue
+            
+            # 立即保存该平台的数据（不进行AI分析，等所有平台抓取完成后再统一分析）
+            backend = storage_manager.get_backend()
+            success = backend.save_news_data(platform_news_data, analyze_importance=False)
+            if success:
+                news_count = platform_news_data.get_total_count()
+                total_news_count += news_count
+                success_count += 1
+                print(f"[存储] {platform_name} 保存成功：{news_count} 条新闻")
+            else:
+                print(f"[存储] {platform_name} 保存失败")
+                failed_ids.append(platform_id)
+                
+        except Exception as e:
+            print(f"[错误] 处理 {platform_name} 数据时出错: {e}")
+            import traceback
+            traceback.print_exc()
+            failed_ids.append(platform_id)
+        
+        # 请求间隔（除了最后一个）
+        if i < len(platforms) - 1:
+            import time as time_module
+            import random
+            actual_interval = request_interval + random.randint(-10, 20)
+            actual_interval = max(50, actual_interval)
+            time_module.sleep(actual_interval / 1000)
+    
+    # 所有平台抓取完成后，统一进行AI重要性分析
+    if success_count > 0:
         print()
-        print("=" * 60)
-        print("✅ 数据抓取和保存成功！")
-        print("=" * 60)
-        print(f"日期: {crawl_date}")
-        print(f"时间: {crawl_time}")
-        print(f"成功平台数: {len(results)}")
-        print(f"失败平台数: {len(failed_ids)}")
-        print(f"新闻总数: {news_data.get_total_count()}")
-        print(f"数据目录: {data_dir}")
-        if failed_ids:
-            print(f"失败的平台: {', '.join(failed_ids)}")
-        return 0
+        print("[AI分析] 开始分析所有新闻的重要性...")
+        storage_manager.analyze_all_news_importance(crawl_date)
+    
+    # 输出总结
+    print()
+    print("=" * 60)
+    if success_count > 0:
+        print("✅ 数据抓取和保存完成！")
     else:
-        print()
-        print("=" * 60)
-        print("❌ 数据保存失败")
-        print("=" * 60)
-        return 1
+        print("❌ 没有成功保存任何数据")
+    print("=" * 60)
+    print(f"日期: {crawl_date}")
+    print(f"时间: {crawl_time}")
+    print(f"成功平台数: {success_count}")
+    print(f"失败平台数: {len(failed_ids)}")
+    print(f"新闻总数: {total_news_count}")
+    print(f"数据目录: {data_dir}")
+    if failed_ids:
+        print(f"失败的平台: {', '.join(failed_ids)}")
+    
+    return 0 if success_count > 0 else 1
 
 
 if __name__ == "__main__":
