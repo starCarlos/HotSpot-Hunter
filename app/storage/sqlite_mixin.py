@@ -111,17 +111,41 @@ class SQLiteStorageMixin:
         else:
             raise FileNotFoundError(f"Schema file not found: {schema_path}")
 
-        # 迁移：为现有数据库添加 importance 字段（如果不存在）
+        # 迁移：为现有数据库添加字段（如果不存在）
         if db_type == "news":
             try:
                 cursor = conn.cursor()
                 cursor.execute("PRAGMA table_info(news_items)")
                 columns = [row[1] for row in cursor.fetchall()]
+                
+                # 添加 importance 字段
                 if "importance" not in columns:
                     cursor.execute("ALTER TABLE news_items ADD COLUMN importance TEXT DEFAULT ''")
                     conn.commit()
+                
+                # 添加 has_been_pushed 字段
+                if "has_been_pushed" not in columns:
+                    cursor.execute("ALTER TABLE news_items ADD COLUMN has_been_pushed INTEGER DEFAULT 0")
+                    # 将现有数据全部标记为已推送（避免历史数据重复推送）
+                    cursor.execute("UPDATE news_items SET has_been_pushed = 1")
+                    conn.commit()
+                    print("[存储] 已为现有新闻数据添加 has_been_pushed 字段，并标记为已推送")
+                
+                # 添加 normalized_title 字段
+                if "normalized_title" not in columns:
+                    from app.utils.helpers import normalize_title_for_dedup
+                    cursor.execute("ALTER TABLE news_items ADD COLUMN normalized_title TEXT DEFAULT ''")
+                    # 为现有数据计算并填充标准化标题
+                    cursor.execute("SELECT id, title FROM news_items WHERE normalized_title = '' OR normalized_title IS NULL")
+                    rows = cursor.fetchall()
+                    if rows:
+                        for row_id, title in rows:
+                            normalized = normalize_title_for_dedup(title)
+                            cursor.execute("UPDATE news_items SET normalized_title = ? WHERE id = ?", (normalized, row_id))
+                    conn.commit()
+                    print("[存储] 已为现有新闻数据添加 normalized_title 字段，并填充标准化标题")
             except sqlite3.Error as e:
-                print(f"[存储] 迁移 importance 字段失败: {e}")
+                print(f"[存储] 迁移字段失败: {e}")
 
         conn.commit()
 
@@ -129,7 +153,7 @@ class SQLiteStorageMixin:
     # 新闻数据存储
     # ========================================
 
-    def _save_news_data_impl(self, data: NewsData, log_prefix: str = "[存储]") -> tuple[bool, int, int, int, int]:
+    def _save_news_data_impl(self, data: NewsData, log_prefix: str = "[存储]") -> tuple[bool, int, int, int]:
         """
         保存新闻数据到 SQLite（核心实现）
 
@@ -138,7 +162,7 @@ class SQLiteStorageMixin:
             log_prefix: 日志前缀
 
         Returns:
-            (success, new_count, updated_count, title_changed_count, off_list_count)
+            (success, new_count, updated_count, off_list_count)
         """
         try:
             conn = self._get_connection(data.date)
@@ -160,7 +184,6 @@ class SQLiteStorageMixin:
             # 统计计数器
             new_count = 0
             updated_count = 0
-            title_changed_count = 0
             success_sources = []
 
             for source_id, news_list in data.items.items():
@@ -178,6 +201,10 @@ class SQLiteStorageMixin:
                     try:
                         # 标准化 URL（去除动态参数，如微博的 band_rank）
                         normalized_url = normalize_url(item.url, source_id) if item.url else ""
+                        
+                        # 标准化标题（去除空格和符号，用于去重）
+                        from app.utils.helpers import normalize_title_for_dedup
+                        normalized_title = normalize_title_for_dedup(item.title)
 
                         # 检查是否存在相同标题和平台的记录
                         cursor.execute("""
@@ -200,12 +227,12 @@ class SQLiteStorageMixin:
                             
                             if is_duplicate:
                                 # 数据完全相同，不更新抓取时间和计数，也不记录排名历史
-                                # 只更新 updated_at 字段
+                                # 只更新 updated_at 和 normalized_title 字段（确保标准化标题是最新的）
                                 cursor.execute("""
                                     UPDATE news_items
-                                    SET updated_at = ?
+                                    SET updated_at = ?, normalized_title = ?
                                     WHERE id = ?
-                                """, (now_str, existing_id))
+                                """, (now_str, normalized_title, existing_id))
                             else:
                                 # 数据有变化，正常更新
                                 cursor.execute("""
@@ -213,11 +240,12 @@ class SQLiteStorageMixin:
                                     SET rank = ?,
                                         url = ?,
                                         mobile_url = ?,
+                                        normalized_title = ?,
                                         last_crawl_time = ?,
                                         crawl_count = ?,
                                         updated_at = ?
                                     WHERE id = ?
-                                """, (item.rank, normalized_url, item.mobile_url,
+                                """, (item.rank, normalized_url, item.mobile_url, normalized_title,
                                       data.crawl_time, existing_count + 1, now_str, existing_id))
                                 
                                 # 记录排名历史
@@ -228,38 +256,14 @@ class SQLiteStorageMixin:
                                 """, (existing_id, item.rank, data.crawl_time, now_str))
                             updated_count += 1
                         else:
-                            # 检查是否存在相同标题但不同平台的记录（跨平台去重）
-                            cursor.execute("""
-                                SELECT id FROM news_items
-                                WHERE title = ? AND platform_id != ?
-                            """, (item.title, source_id))
-                            existing_by_title = cursor.fetchall()
-
-                            # 删除所有相同标题但不同平台的旧记录（跨平台去重）
-                            if existing_by_title:
-                                for old_record in existing_by_title:
-                                    old_id = old_record[0]
-                                    # 删除关联的排名历史
-                                    cursor.execute("""
-                                        DELETE FROM rank_history WHERE news_item_id = ?
-                                    """, (old_id,))
-                                    # 删除关联的标题变更记录
-                                    cursor.execute("""
-                                        DELETE FROM title_changes WHERE news_item_id = ?
-                                    """, (old_id,))
-                                    # 删除新闻条目
-                                    cursor.execute("""
-                                        DELETE FROM news_items WHERE id = ?
-                                    """, (old_id,))
-
-                            # 插入新记录（存储标准化后的 URL）
+                            # 插入新记录（存储标准化后的 URL 和标准化标题）
                             cursor.execute("""
                                 INSERT INTO news_items
-                                (title, platform_id, rank, url, mobile_url,
+                                (title, normalized_title, platform_id, rank, url, mobile_url,
                                  first_crawl_time, last_crawl_time, crawl_count,
                                  created_at, updated_at)
-                                VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
-                            """, (item.title, source_id, item.rank, normalized_url,
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+                            """, (item.title, normalized_title, source_id, item.rank, normalized_url,
                                   item.mobile_url, data.crawl_time, data.crawl_time,
                                   now_str, now_str))
                             new_id = cursor.lastrowid
@@ -362,11 +366,11 @@ class SQLiteStorageMixin:
 
             conn.commit()
 
-            return True, new_count, updated_count, title_changed_count, off_list_count
+            return True, new_count, updated_count, off_list_count
 
         except Exception as e:
             print(f"{log_prefix} 保存失败: {e}")
-            return False, 0, 0, 0, 0
+            return False, 0, 0, 0
 
     def _get_today_all_data_impl(self, date: Optional[str] = None) -> Optional[NewsData]:
         """
@@ -779,75 +783,6 @@ class SQLiteStorageMixin:
         except Exception as e:
             print(f"[存储] 获取抓取时间列表失败: {e}")
             return []
-
-    # ========================================
-    # 推送记录
-    # ========================================
-
-    def _has_pushed_today_impl(self, date: Optional[str] = None) -> bool:
-        """
-        检查指定日期是否已推送过
-
-        Args:
-            date: 日期字符串（YYYY-MM-DD），默认为今天
-
-        Returns:
-            是否已推送
-        """
-        try:
-            conn = self._get_connection(date)
-            cursor = conn.cursor()
-
-            # push_records 表的 date 字段需要完整日期（YYYY-MM-DD），而不是月份
-            target_date = self._format_full_date(date)
-
-            cursor.execute("""
-                SELECT pushed FROM push_records WHERE date = ?
-            """, (target_date,))
-
-            row = cursor.fetchone()
-            if row:
-                return bool(row[0])
-            return False
-
-        except Exception as e:
-            print(f"[存储] 检查推送记录失败: {e}")
-            return False
-
-    def _record_push_impl(self, report_type: str, date: Optional[str] = None) -> bool:
-        """
-        记录推送
-
-        Args:
-            report_type: 报告类型
-            date: 日期字符串（YYYY-MM-DD），默认为今天
-
-        Returns:
-            是否记录成功
-        """
-        try:
-            conn = self._get_connection(date)
-            cursor = conn.cursor()
-
-            # push_records 表的 date 字段需要完整日期（YYYY-MM-DD），而不是月份
-            target_date = self._format_full_date(date)
-            now_str = self._get_configured_time().strftime("%Y-%m-%d %H:%M:%S")
-
-            cursor.execute("""
-                INSERT INTO push_records (date, pushed, push_time, report_type, created_at)
-                VALUES (?, 1, ?, ?, ?)
-                ON CONFLICT(date) DO UPDATE SET
-                    pushed = 1,
-                    push_time = excluded.push_time,
-                    report_type = excluded.report_type
-            """, (target_date, now_str, report_type, now_str))
-
-            conn.commit()
-            return True
-
-        except Exception as e:
-            print(f"[存储] 记录推送失败: {e}")
-            return False
 
     # ========================================
     # RSS 数据存储

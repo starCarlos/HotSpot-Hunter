@@ -10,6 +10,7 @@ import shutil
 import pytz
 import re
 import threading
+import os
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -119,10 +120,29 @@ class LocalStorageBackend(SQLiteStorageMixin, StorageBackend):
 
         # 如果当前线程还没有这个数据库的连接，创建新连接
         if db_path not in self._thread_local.db_connections:
-            conn = sqlite3.connect(db_path, check_same_thread=False)
+            # 增加 timeout，避免并发写入时过早失败（尤其是 Docker bind mount 场景）
+            conn = sqlite3.connect(db_path, check_same_thread=False, timeout=30)
             conn.row_factory = sqlite3.Row
-            # 启用 WAL 模式以提高并发性能
-            conn.execute("PRAGMA journal_mode=WAL")
+            # 设置 busy_timeout，减少锁竞争导致的失败
+            conn.execute("PRAGMA busy_timeout=5000")
+
+            # 在 Docker + bind mount（尤其 Windows/SMB/网络盘）下，SQLite WAL 常见 I/O 兼容性问题。
+            # 默认策略：
+            # - 容器内默认使用 DELETE（更兼容，牺牲并发性能）
+            # - 非容器环境默认使用 WAL（更高并发）
+            # 可通过环境变量 SQLITE_JOURNAL_MODE 强制覆盖：DELETE|WAL|TRUNCATE|PERSIST|MEMORY|OFF
+            is_docker = Path("/.dockerenv").exists()
+            journal_mode = os.environ.get("SQLITE_JOURNAL_MODE", "").strip().upper()
+            if not journal_mode:
+                journal_mode = "DELETE" if is_docker else "WAL"
+            try:
+                conn.execute(f"PRAGMA journal_mode={journal_mode}")
+            except sqlite3.Error as e:
+                if journal_mode != "DELETE":
+                    print(f"[本地存储] journal_mode={journal_mode} 失败: {e}，回退到 DELETE 模式")
+                    conn.execute("PRAGMA journal_mode=DELETE")
+                else:
+                    raise
             self._init_tables(conn, db_type)
             self._thread_local.db_connections[db_path] = conn
 
@@ -145,7 +165,7 @@ class LocalStorageBackend(SQLiteStorageMixin, StorageBackend):
             # 确保目录存在
             db_path.parent.mkdir(parents=True, exist_ok=True)
 
-        success, new_count, updated_count, title_changed_count, off_list_count = \
+        success, new_count, updated_count, off_list_count = \
             self._save_news_data_impl(data, "[本地存储]")
 
         if success:
@@ -153,8 +173,6 @@ class LocalStorageBackend(SQLiteStorageMixin, StorageBackend):
             log_parts = [f"[本地存储] 处理完成：新增 {new_count} 条"]
             if updated_count > 0:
                 log_parts.append(f"更新 {updated_count} 条")
-            if title_changed_count > 0:
-                log_parts.append(f"标题变更 {title_changed_count} 条")
             if off_list_count > 0:
                 log_parts.append(f"脱榜 {off_list_count} 条")
             print("，".join(log_parts))
@@ -372,8 +390,12 @@ class LocalStorageBackend(SQLiteStorageMixin, StorageBackend):
                 print("[重要性分析] 未找到数据，跳过分析")
                 return
             
-            # 收集需要分析的新闻（只分析新增的，已有importance的跳过，重复的新闻跳过）
+            # 收集需要分析的新闻（只分析新增的，已有importance的跳过，重复的新闻跳过，已推送的新闻跳过）
             news_to_analyze = []
+            conn = self._get_connection(date or all_data.date)
+            cursor = conn.cursor()
+            from app.utils.helpers import normalize_title_for_dedup
+            
             for platform_id, news_list in all_data.items.items():
                 platform_name = all_data.id_to_name.get(platform_id, platform_id)
                 for item in news_list:
@@ -385,6 +407,22 @@ class LocalStorageBackend(SQLiteStorageMixin, StorageBackend):
                     )
                     if existing_importance:
                         continue  # 已有重要性评级，跳过
+                    
+                    # 检查是否已推送过（使用标准化标题匹配，跨平台去重）
+                    normalized_title = normalize_title_for_dedup(item.title)
+                    cursor.execute("""
+                        SELECT has_been_pushed FROM news_items
+                        WHERE has_been_pushed = 1
+                        AND (
+                            normalized_title = ? OR
+                            (normalized_title = '' OR normalized_title IS NULL) AND
+                            REPLACE(REPLACE(title, ' ', ''), '　', '') = REPLACE(REPLACE(?, ' ', ''), '　', '')
+                        )
+                        LIMIT 1
+                    """, (normalized_title, item.title))
+                    result = cursor.fetchone()
+                    if result:
+                        continue  # 已推送过，跳过（不论哪个平台）
                     
                     # 检查是否是重复的新闻
                     # 重复的新闻（数据完全相同）不进入AI分析和推送
@@ -473,6 +511,62 @@ class LocalStorageBackend(SQLiteStorageMixin, StorageBackend):
                 try:
                     from app.utils.notification_config_loader import load_notification_config
                     from app.notification.important_news_sender import send_important_news_to_all_channels
+                    from app.utils.time import get_timestamp
+                    
+                    # 过滤已推送的新闻，避免重复推送
+                    news_to_push = []
+                    conn = self._get_connection(date or all_data.date)
+                    cursor = conn.cursor()
+                    
+                    from app.utils.helpers import normalize_title_for_dedup
+                    
+                    for news in important_news:
+                        title = news["title"]
+                        platform_id = news["platform_id"]
+                        
+                        # 标准化标题（去除空格和符号，用于去重）
+                        normalized_title = normalize_title_for_dedup(title)
+                        
+                        # 检查该新闻是否已在任何平台推送过（使用标准化标题匹配）
+                        # 同时处理 normalized_title 为空或NULL的情况（兼容旧数据）
+                        cursor.execute("""
+                            SELECT title, platform_id, has_been_pushed, normalized_title FROM news_items
+                            WHERE has_been_pushed = 1
+                            AND (
+                                normalized_title = ? OR
+                                (normalized_title = '' OR normalized_title IS NULL) AND
+                                REPLACE(REPLACE(title, ' ', ''), '　', '') = REPLACE(REPLACE(?, ' ', ''), '　', '')
+                            )
+                            LIMIT 1
+                        """, (normalized_title, title))
+                        
+                        result = cursor.fetchone()
+                        if result:
+                            # 已在任何平台推送过，跳过（不论哪个平台）
+                            existing_title, existing_platform, _, existing_normalized = result
+                            print(f"[重要新闻推送] 跳过已推送的新闻（跨平台去重）: {title[:50]}... ({platform_id})")
+                            print(f"[重要新闻推送] 匹配到的已推送新闻: {existing_title[:50]}... ({existing_platform})")
+                            print(f"[重要新闻推送] 当前标准化标题: {normalized_title}, 数据库标准化标题: {existing_normalized or '(空)'}")
+                            
+                            # 如果数据库中的 normalized_title 为空，更新它
+                            if not existing_normalized:
+                                cursor.execute("""
+                                    UPDATE news_items
+                                    SET normalized_title = ?
+                                    WHERE title = ? AND platform_id = ?
+                                """, (normalized_title, existing_title, existing_platform))
+                                conn.commit()
+                                print(f"[重要新闻推送] 已更新数据库中的标准化标题: {existing_title[:50]}...")
+                            
+                            continue
+                        
+                        news_to_push.append(news)
+                    
+                    if not news_to_push:
+                        print(f"[重要新闻推送] 所有重要新闻都已推送过，无需推送")
+                        return
+                    
+                    print(f"[重要新闻推送] 过滤后，需要推送 {len(news_to_push)} 条新闻（共 {len(important_news)} 条）")
                     
                     # 加载推送配置
                     notification_config = load_notification_config()
@@ -519,7 +613,7 @@ class LocalStorageBackend(SQLiteStorageMixin, StorageBackend):
                         
                         # 推送到所有配置的渠道（同步执行）
                         results = send_important_news_to_all_channels(
-                            important_news=important_news,
+                            important_news=news_to_push,
                             notification_config=notification_config,
                             get_time_func=get_time_func,
                             split_content_func=split_content_func,
@@ -532,6 +626,69 @@ class LocalStorageBackend(SQLiteStorageMixin, StorageBackend):
                         for channel, success in results.items():
                             status = "✅" if success else "❌"
                             print(f"[重要新闻推送] {status} {channel}")
+                        
+                        # 推送成功后，标记所有平台的相同标题新闻为已推送（跨平台去重）
+                        if success_count > 0:
+                            from app.utils.helpers import normalize_title_for_dedup
+                            total_updated = 0
+                            normalized_title_to_title = {}  # 收集标准化标题 -> 原始标题（用于兼容旧数据回填/匹配）
+                            
+                            for news in news_to_push:
+                                title = news["title"]
+                                normalized_title = normalize_title_for_dedup(title)
+                                if normalized_title not in normalized_title_to_title:
+                                    normalized_title_to_title[normalized_title] = title
+                            
+                            # 批量更新所有标准化标题一致的记录
+                            for normalized_title, sample_title in normalized_title_to_title.items():
+                                # 先查询有多少条记录需要更新（用于调试）
+                                cursor.execute("""
+                                    SELECT COUNT(*) FROM news_items
+                                    WHERE normalized_title = ?
+                                    OR (
+                                        (normalized_title = '' OR normalized_title IS NULL) AND
+                                        REPLACE(REPLACE(title, ' ', ''), '　', '') = REPLACE(REPLACE(?, ' ', ''), '　', '')
+                                    )
+                                """, (normalized_title, sample_title))
+                                total_records = cursor.fetchone()[0]
+                                
+                                # 查询已推送的记录数（用于调试）
+                                cursor.execute("""
+                                    SELECT COUNT(*) FROM news_items
+                                    WHERE has_been_pushed = 1 AND (
+                                        normalized_title = ?
+                                        OR (
+                                            (normalized_title = '' OR normalized_title IS NULL) AND
+                                            REPLACE(REPLACE(title, ' ', ''), '　', '') = REPLACE(REPLACE(?, ' ', ''), '　', '')
+                                        )
+                                    )
+                                """, (normalized_title, sample_title))
+                                already_pushed = cursor.fetchone()[0]
+                                
+                                # 将所有平台的相同标准化标题新闻都标记为已推送
+                                cursor.execute("""
+                                    UPDATE news_items
+                                    SET has_been_pushed = 1,
+                                        normalized_title = CASE
+                                            WHEN normalized_title = '' OR normalized_title IS NULL THEN ?
+                                            ELSE normalized_title
+                                        END
+                                    WHERE normalized_title = ?
+                                    OR (
+                                        (normalized_title = '' OR normalized_title IS NULL) AND
+                                        REPLACE(REPLACE(title, ' ', ''), '　', '') = REPLACE(REPLACE(?, ' ', ''), '　', '')
+                                    )
+                                """, (normalized_title, normalized_title, sample_title))
+                                
+                                # 统计实际更新的记录数
+                                updated_count = cursor.rowcount
+                                total_updated += updated_count
+                                
+                                # 调试信息
+                                print(f"[重要新闻推送] 标准化标题 '{normalized_title}': 总记录 {total_records} 条，已推送 {already_pushed} 条，本次更新 {updated_count} 条")
+                            
+                            conn.commit()
+                            print(f"[重要新闻推送] 已标记 {total_updated} 条新闻为已推送（包括所有平台的相同标准化标题新闻，共 {len(normalized_title_to_title)} 个不同的标准化标题）")
                 except Exception as e:
                     print(f"[重要新闻推送] 推送重要新闻时出错: {e}")
                     import traceback

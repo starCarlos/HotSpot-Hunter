@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS platforms (
 CREATE TABLE IF NOT EXISTS news_items (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     title TEXT NOT NULL,
+    normalized_title TEXT DEFAULT '',     -- 标准化标题（去除空格和符号，用于去重）
     platform_id TEXT NOT NULL,
     rank INTEGER NOT NULL,
     url TEXT DEFAULT '',
@@ -28,22 +29,10 @@ CREATE TABLE IF NOT EXISTS news_items (
     last_crawl_time INTEGER NOT NULL,    -- 最后抓取时间（Unix 时间戳）
     crawl_count INTEGER DEFAULT 1,       -- 抓取次数
     importance TEXT DEFAULT '',           -- AI分析的重要性评级: 'critical'|'high'|'medium'|'low'
+    has_been_pushed INTEGER DEFAULT 0,    -- 是否已推送过（0=未推送，1=已推送）
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (platform_id) REFERENCES platforms(id)
-);
-
--- ============================================
--- 标题变更历史表
--- 记录同一 URL 下标题的变化
--- ============================================
-CREATE TABLE IF NOT EXISTS title_changes (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    news_item_id INTEGER NOT NULL,
-    old_title TEXT NOT NULL,
-    new_title TEXT NOT NULL,
-    changed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (news_item_id) REFERENCES news_items(id)
 );
 
 -- ============================================
@@ -81,19 +70,6 @@ CREATE TABLE IF NOT EXISTS crawl_source_status (
     PRIMARY KEY (crawl_record_id, platform_id),
     FOREIGN KEY (crawl_record_id) REFERENCES crawl_records(id),
     FOREIGN KEY (platform_id) REFERENCES platforms(id)
-);
-
--- ============================================
--- 推送记录表
--- 用于 push_window once_per_day 功能
--- ============================================
-CREATE TABLE IF NOT EXISTS push_records (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    date TEXT NOT NULL UNIQUE,
-    pushed INTEGER DEFAULT 0,
-    push_time TEXT,
-    report_type TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- ============================================

@@ -31,6 +31,45 @@ def clean_title(title: str) -> str:
     return cleaned_title
 
 
+def normalize_title_for_dedup(title: str) -> str:
+    """标准化标题用于去重（去除空格和符号）
+
+    标准化规则：
+    - 去除所有空格（包括全角和半角空格）
+    - 去除所有标点符号和特殊字符
+    - 只保留中文、英文、数字
+    - 转换为小写（英文）
+
+    Args:
+        title: 原始标题字符串
+
+    Returns:
+        标准化后的标题字符串，用于去重匹配
+
+    Examples:
+        >>> normalize_title_for_dedup("字节跳动 AI 海外版")
+        '字节跳动ai海外版'
+        >>> normalize_title_for_dedup("字节跳动　AI　海外版")
+        '字节跳动ai海外版'
+        >>> normalize_title_for_dedup("国务院国资委：国资央企将更大力度推进"AI+"专项行动")
+        '国务院国资委国资央企将更大力度推进ai专项行动'
+    """
+    if not isinstance(title, str):
+        title = str(title)
+    
+    # 去除所有空格（包括全角空格）
+    normalized = title.replace(" ", "").replace("　", "")
+    
+    # 只保留中文、英文、数字
+    # 使用正则表达式匹配：中文字符、英文字母、数字
+    normalized = re.sub(r"[^\u4e00-\u9fa5a-zA-Z0-9]", "", normalized)
+    
+    # 转换为小写（英文）
+    normalized = normalized.lower()
+    
+    return normalized
+
+
 def html_escape(text: str) -> str:
     """HTML特殊字符转义
 
