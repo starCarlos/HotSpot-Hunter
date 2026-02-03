@@ -144,6 +144,26 @@ class SQLiteStorageMixin:
                             cursor.execute("UPDATE news_items SET normalized_title = ? WHERE id = ?", (normalized, row_id))
                     conn.commit()
                     print("[存储] 已为现有新闻数据添加 normalized_title 字段，并填充标准化标题")
+
+                # 一次性迁移：按新规则（去掉所有标点）重新计算所有行的 normalized_title
+                if "normalized_title" in columns:
+                    cursor.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table' AND name='_migrations'"
+                    )
+                    if cursor.fetchone() is None:
+                        cursor.execute("CREATE TABLE _migrations (name TEXT PRIMARY KEY)")
+                    cursor.execute(
+                        "INSERT OR IGNORE INTO _migrations (name) VALUES ('normalized_title_no_punctuation')"
+                    )
+                    if cursor.rowcount > 0:
+                        from app.utils.helpers import normalize_title_for_dedup
+                        cursor.execute("SELECT id, title FROM news_items")
+                        rows = cursor.fetchall()
+                        for row_id, title in rows:
+                            normalized = normalize_title_for_dedup(title)
+                            cursor.execute("UPDATE news_items SET normalized_title = ? WHERE id = ?", (normalized, row_id))
+                        conn.commit()
+                        print("[存储] 已按新规则重新填充所有新闻的 normalized_title（去掉所有标点）")
             except sqlite3.Error as e:
                 print(f"[存储] 迁移字段失败: {e}")
 

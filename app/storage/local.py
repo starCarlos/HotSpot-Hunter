@@ -412,14 +412,9 @@ class LocalStorageBackend(SQLiteStorageMixin, StorageBackend):
                     normalized_title = normalize_title_for_dedup(item.title)
                     cursor.execute("""
                         SELECT has_been_pushed FROM news_items
-                        WHERE has_been_pushed = 1
-                        AND (
-                            normalized_title = ? OR
-                            (normalized_title = '' OR normalized_title IS NULL) AND
-                            REPLACE(REPLACE(title, ' ', ''), '　', '') = REPLACE(REPLACE(?, ' ', ''), '　', '')
-                        )
+                        WHERE has_been_pushed = 1 AND normalized_title = ?
                         LIMIT 1
-                    """, (normalized_title, item.title))
+                    """, (normalized_title,))
                     result = cursor.fetchone()
                     if result:
                         continue  # 已推送过，跳过（不论哪个平台）
@@ -528,17 +523,11 @@ class LocalStorageBackend(SQLiteStorageMixin, StorageBackend):
                         normalized_title = normalize_title_for_dedup(title)
                         
                         # 检查该新闻是否已在任何平台推送过（使用标准化标题匹配）
-                        # 同时处理 normalized_title 为空或NULL的情况（兼容旧数据）
                         cursor.execute("""
                             SELECT title, platform_id, has_been_pushed, normalized_title FROM news_items
-                            WHERE has_been_pushed = 1
-                            AND (
-                                normalized_title = ? OR
-                                (normalized_title = '' OR normalized_title IS NULL) AND
-                                REPLACE(REPLACE(title, ' ', ''), '　', '') = REPLACE(REPLACE(?, ' ', ''), '　', '')
-                            )
+                            WHERE has_been_pushed = 1 AND normalized_title = ?
                             LIMIT 1
-                        """, (normalized_title, title))
+                        """, (normalized_title,))
                         
                         result = cursor.fetchone()
                         if result:
@@ -547,16 +536,6 @@ class LocalStorageBackend(SQLiteStorageMixin, StorageBackend):
                             print(f"[重要新闻推送] 跳过已推送的新闻（跨平台去重）: {title[:50]}... ({platform_id})")
                             print(f"[重要新闻推送] 匹配到的已推送新闻: {existing_title[:50]}... ({existing_platform})")
                             print(f"[重要新闻推送] 当前标准化标题: {normalized_title}, 数据库标准化标题: {existing_normalized or '(空)'}")
-                            
-                            # 如果数据库中的 normalized_title 为空，更新它
-                            if not existing_normalized:
-                                cursor.execute("""
-                                    UPDATE news_items
-                                    SET normalized_title = ?
-                                    WHERE title = ? AND platform_id = ?
-                                """, (normalized_title, existing_title, existing_platform))
-                                conn.commit()
-                                print(f"[重要新闻推送] 已更新数据库中的标准化标题: {existing_title[:50]}...")
                             
                             continue
                         
@@ -642,43 +621,25 @@ class LocalStorageBackend(SQLiteStorageMixin, StorageBackend):
                             # 批量更新所有标准化标题一致的记录
                             for normalized_title, sample_title in normalized_title_to_title.items():
                                 # 先查询有多少条记录需要更新（用于调试）
-                                cursor.execute("""
-                                    SELECT COUNT(*) FROM news_items
-                                    WHERE normalized_title = ?
-                                    OR (
-                                        (normalized_title = '' OR normalized_title IS NULL) AND
-                                        REPLACE(REPLACE(title, ' ', ''), '　', '') = REPLACE(REPLACE(?, ' ', ''), '　', '')
-                                    )
-                                """, (normalized_title, sample_title))
+                                cursor.execute(
+                                    "SELECT COUNT(*) FROM news_items WHERE normalized_title = ?",
+                                    (normalized_title,),
+                                )
                                 total_records = cursor.fetchone()[0]
                                 
                                 # 查询已推送的记录数（用于调试）
                                 cursor.execute("""
                                     SELECT COUNT(*) FROM news_items
-                                    WHERE has_been_pushed = 1 AND (
-                                        normalized_title = ?
-                                        OR (
-                                            (normalized_title = '' OR normalized_title IS NULL) AND
-                                            REPLACE(REPLACE(title, ' ', ''), '　', '') = REPLACE(REPLACE(?, ' ', ''), '　', '')
-                                        )
-                                    )
-                                """, (normalized_title, sample_title))
+                                    WHERE has_been_pushed = 1 AND normalized_title = ?
+                                """, (normalized_title,))
                                 already_pushed = cursor.fetchone()[0]
                                 
                                 # 将所有平台的相同标准化标题新闻都标记为已推送
                                 cursor.execute("""
                                     UPDATE news_items
-                                    SET has_been_pushed = 1,
-                                        normalized_title = CASE
-                                            WHEN normalized_title = '' OR normalized_title IS NULL THEN ?
-                                            ELSE normalized_title
-                                        END
+                                    SET has_been_pushed = 1
                                     WHERE normalized_title = ?
-                                    OR (
-                                        (normalized_title = '' OR normalized_title IS NULL) AND
-                                        REPLACE(REPLACE(title, ' ', ''), '　', '') = REPLACE(REPLACE(?, ' ', ''), '　', '')
-                                    )
-                                """, (normalized_title, normalized_title, sample_title))
+                                """, (normalized_title,))
                                 
                                 # 统计实际更新的记录数
                                 updated_count = cursor.rowcount

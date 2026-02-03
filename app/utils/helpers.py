@@ -60,8 +60,7 @@ def normalize_title_for_dedup(title: str) -> str:
     # 去除所有空格（包括全角空格）
     normalized = title.replace(" ", "").replace("　", "")
     
-    # 只保留中文、英文、数字
-    # 使用正则表达式匹配：中文字符、英文字母、数字
+    # 去掉所有标点及非字母数字（只保留中文、英文、数字）
     normalized = re.sub(r"[^\u4e00-\u9fa5a-zA-Z0-9]", "", normalized)
     
     # 转换为小写（英文）
