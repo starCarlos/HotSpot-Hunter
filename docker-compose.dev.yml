@@ -20,7 +20,6 @@ services:
       - TZ=Asia/Shanghai
       # 定时任务配置
       - CRAWL_SCHEDULER_ENABLED=${CRAWL_SCHEDULER_ENABLED:-true}
-      - CRAWL_INTERVAL_HOURS=${CRAWL_INTERVAL_HOURS:-1.0}
       # 文件监控配置（使用 watchfiles 后端）
       - UVICORN_RELOAD_INCLUDE=*.py
       - UVICORN_RELOAD_EXCLUDE=*.pyc,__pycache__,.git,*.db,*.db-shm,*.db-wal

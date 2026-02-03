@@ -43,6 +43,7 @@ EMAIL_SMTP_PORT: ""  # 自定义 SMTP 端口（可选）
 # 推送配置
 MAX_ACCOUNTS_PER_CHANNEL: 3  # 每个渠道最多使用的账号数量
 BATCH_SEND_INTERVAL: 1.0  # 批次发送间隔（秒）
+CRAWL_INTERVAL_HOURS: 3  # 新闻抓取和推送间隔（小时），默认 3
 
 # 各渠道批次大小限制
 FEISHU_BATCH_SIZE: 29000
@@ -52,6 +53,15 @@ BARK_BATCH_SIZE: 3600
 
 # 企业微信消息类型
 WEWORK_MSG_TYPE: "markdown"  # markdown 或 text
+
+# AI 翻译配置（仅推送阶段翻译标题；使用本地缓存避免重复翻译）
+# 注意：AI Key 等通用配置仍来自 config/ai_config.yaml
+TRANSLATION:
+  ENABLED: false
+  TARGET_LANGUAGE: "Chinese"
+  BATCH_SIZE: 20
+  CACHE_DB_PATH: ""  # 可选，默认 output/cache/translation_cache.db
+  TEMPERATURE: 0.2
 
 # 显示区域配置
 DISPLAY:

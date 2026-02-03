@@ -48,11 +48,19 @@ def load_notification_config(config_path: Optional[str] = None) -> Dict[str, Any
         "EMAIL_SMTP_PORT": "",
         "MAX_ACCOUNTS_PER_CHANNEL": 3,
         "BATCH_SEND_INTERVAL": 1.0,
+        "CRAWL_INTERVAL_HOURS": 3.0,
         "FEISHU_BATCH_SIZE": 29000,
         "DINGTALK_BATCH_SIZE": 20000,
         "MESSAGE_BATCH_SIZE": 4000,
         "BARK_BATCH_SIZE": 3600,
         "WEWORK_MSG_TYPE": "markdown",
+        "TRANSLATION": {
+            "ENABLED": False,
+            "TARGET_LANGUAGE": "Chinese",
+            "BATCH_SIZE": 20,
+            "CACHE_DB_PATH": "",
+            "TEMPERATURE": 0.2,
+        },
         "DISPLAY": {
             "REGIONS": {
                 "HOTLIST": True,
@@ -80,6 +88,18 @@ def load_notification_config(config_path: Optional[str] = None) -> Dict[str, Any
             merged_config["DISPLAY"] = default_config["DISPLAY"]
         elif "REGIONS" not in merged_config["DISPLAY"]:
             merged_config["DISPLAY"]["REGIONS"] = default_config["DISPLAY"]["REGIONS"]
+
+        # 确保 TRANSLATION 配置存在
+        if "TRANSLATION" not in merged_config:
+            merged_config["TRANSLATION"] = default_config["TRANSLATION"]
+        else:
+            translation_cfg = merged_config.get("TRANSLATION") or {}
+            if not isinstance(translation_cfg, dict):
+                translation_cfg = {}
+            merged_config["TRANSLATION"] = {
+                **default_config["TRANSLATION"],
+                **translation_cfg,
+            }
         
         return merged_config
     except Exception as e:

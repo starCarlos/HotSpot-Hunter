@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+from app.ai.llm_client import LLMClient, LLMConnectionError, LLMHTTPError, LLMTimeoutError
+
 
 @dataclass
 class AIAnalysisResult:
@@ -297,17 +299,16 @@ RSS内容:
             result.max_news_limit = self.max_news
             return result
         except Exception as e:
-            import requests
             error_type = type(e).__name__
             error_msg = str(e)
 
             # 针对不同错误类型提供更友好的提示
-            if isinstance(e, requests.exceptions.Timeout):
+            if isinstance(e, LLMTimeoutError):
                 friendly_msg = f"AI API 请求超时（{self.timeout}秒），请检查网络或增加超时时间"
-            elif isinstance(e, requests.exceptions.ConnectionError):
+            elif isinstance(e, LLMConnectionError):
                 friendly_msg = f"无法连接到 AI API ({self.base_url or self.provider})，请检查网络和 API 地址"
-            elif isinstance(e, requests.exceptions.HTTPError):
-                status_code = e.response.status_code if hasattr(e, 'response') and e.response else "未知"
+            elif isinstance(e, LLMHTTPError):
+                status_code = e.status_code
                 if status_code == 401:
                     friendly_msg = "AI API 认证失败，请检查 API Key 是否正确"
                 elif status_code == 429:
@@ -315,7 +316,7 @@ RSS内容:
                 elif status_code == 500:
                     friendly_msg = "AI API 服务器内部错误，请稍后重试"
                 else:
-                    friendly_msg = f"AI API 返回错误 (HTTP {status_code}): {error_msg[:100]}"
+                    friendly_msg = f"AI API 返回错误 (HTTP {status_code or '未知'}): {error_msg[:100]}"
             else:
                 # 截断过长的错误消息
                 if len(error_msg) > 150:
@@ -492,147 +493,19 @@ RSS内容:
         return "→".join(parts)
 
     def _call_ai_api(self, user_prompt: str) -> str:
-        """调用 AI API"""
-        if self.provider == "gemini":
-            return self._call_gemini(user_prompt)
-        return self._call_openai_compatible(user_prompt)
-
-    def _get_api_url(self) -> str:
-        """获取完整 API URL"""
-        if self.base_url:
-            return self.base_url
-
-        # 预设完整端点
-        urls = {
-            "deepseek": "https://api.deepseek.com/v1/chat/completions",
-            "openai": "https://api.openai.com/v1/chat/completions",
-        }
-        url = urls.get(self.provider)
-        if not url:
-            raise ValueError(f"{self.provider} 需要配置 base_url（完整 API 地址）")
-        return url
-
-    def _call_openai_compatible(self, user_prompt: str) -> str:
-        """调用 OpenAI 兼容接口"""
-        import requests
-
-        url = self._get_api_url()
-
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-        }
-
-        messages = []
+        """调用 AI API（请求细节在 LLMClient 中实现）"""
+        messages: List[Dict[str, str]] = []
         if self.system_prompt:
             messages.append({"role": "system", "content": self.system_prompt})
         messages.append({"role": "user", "content": user_prompt})
 
-        payload = {
-            "model": self.model,
-            "messages": messages,
-            "temperature": self.temperature,
-        }
-
-        # 某些 API 不支持 max_tokens
-        if self.max_tokens:
-            payload["max_tokens"] = self.max_tokens
-
-        if self.extra_params:
-            payload.update(self.extra_params)
-        
-        # 添加重试逻辑处理 503 等临时错误
-        import time
-        max_retries = 3  # 增加重试次数到 3 次
-        retry_delay = 3  # 增加延迟到 3 秒
-        
-        for attempt in range(max_retries + 1):
-            try:
-                response = requests.post(
-                    url,
-                    headers=headers,
-                    json=payload,
-                    timeout=self.timeout,
-                )
-                response.raise_for_status()
-
-                data = response.json()
-                return data["choices"][0]["message"]["content"]
-                
-            except requests.exceptions.HTTPError as e:
-                # 对于 503、502、504 等临时错误，进行重试
-                if hasattr(e, 'response') and e.response is not None:
-                    status_code = e.response.status_code
-                    if status_code in [502, 503, 504] and attempt < max_retries:
-                        wait_time = retry_delay * (attempt + 1)
-                        print(f"[AI] API 返回 {status_code} 错误（服务暂时不可用），{wait_time}秒后重试 ({attempt + 1}/{max_retries})...")
-                        time.sleep(wait_time)
-                        continue
-                    elif status_code in [502, 503, 504]:
-                        print(f"[AI] API 返回 {status_code} 错误，已重试 {max_retries} 次，仍然失败")
-                        print(f"[AI] 请求URL: {url}")
-                        print(f"[AI] 响应头: {dict(e.response.headers)}")
-                        print(f"[AI] 响应体: {e.response.text[:500]}")
-                raise
-            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
-                # 超时或连接错误，进行重试
-                if attempt < max_retries:
-                    wait_time = retry_delay * (attempt + 1)
-                    print(f"[AI] 请求失败 ({type(e).__name__})，{wait_time}秒后重试 ({attempt + 1}/{max_retries})...")
-                    time.sleep(wait_time)
-                    continue
-                # 重试次数用完，输出最终错误
-                print(f"[AI] 请求失败 ({type(e).__name__})，已重试 {max_retries} 次，仍然失败")
-                raise
-
-    def _call_gemini(self, user_prompt: str) -> str:
-        """调用 Google Gemini API"""
-        import requests
-
-        model = self.model or "gemini-1.5-flash"
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={self.api_key}"
-
-        headers = {
-            "Content-Type": "application/json",
-        }
-
-        payload = {
-            "contents": [{
-                "role": "user",
-                "parts": [{"text": user_prompt}]
-            }],
-            "generationConfig": {
-                "temperature": self.temperature,
-            },
-            "safetySettings": [
-                {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-                {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-                {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-                {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
-            ]
-        }
-
-        if self.system_prompt:
-            payload["system_instruction"] = {
-                "parts": [{"text": self.system_prompt}]
-            }
-
-        if self.max_tokens:
-            payload["generationConfig"]["maxOutputTokens"] = self.max_tokens
-
-        if self.extra_params:
-            payload["generationConfig"].update(self.extra_params)
-
-        response = requests.post(
-            url,
-            headers=headers,
-            json=payload,
-            timeout=self.timeout,
+        client = LLMClient(self.ai_config, debug=self.debug)
+        return client.chat(
+            messages,
+            temperature=self.temperature,
+            max_tokens=self.max_tokens,
+            extra_params=self.extra_params,
         )
-        response.raise_for_status()
-
-        data = response.json()
-        return data["candidates"][0]["content"]["parts"][0]["text"]
 
     def _parse_response(self, response: str) -> AIAnalysisResult:
         """解析 AI 响应"""

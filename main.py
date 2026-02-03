@@ -12,15 +12,21 @@ from pathlib import Path
 from contextlib import asynccontextmanager
 from api.routes import news, health, filtered_news
 from app.scheduler import start_scheduler, stop_scheduler
+from app.utils.notification_config_loader import load_notification_config
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
-    # 启动时：启动定时任务调度器
+    # 启动时：启动定时任务调度器（间隔优先读环境变量 CRAWL_INTERVAL_HOURS，否则读配置，默认 3 小时）
     print("[启动] 正在启动定时任务调度器...")
-    start_scheduler()
-    print("[启动] 定时任务调度器已启动")
+    config = load_notification_config()
+    interval_hours = float(
+        os.environ.get("CRAWL_INTERVAL_HOURS")
+        or str(config.get("CRAWL_INTERVAL_HOURS", 3.0))
+    )
+    start_scheduler(interval_hours=interval_hours)
+    print(f"[启动] 定时任务调度器已启动，抓取与推送间隔: {interval_hours} 小时")
     
     yield
     

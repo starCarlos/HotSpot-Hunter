@@ -44,9 +44,34 @@ def send_important_news_to_all_channels(
     
     # 将重要新闻转换为 report_data 格式
     report_data = _convert_important_news_to_report_data(important_news)
-    
+
     # 创建 NotificationDispatcher
     from app.notification import NotificationDispatcher
+
+    # 可选：推送阶段 AI 翻译（标题缓存避免重复翻译）
+    translator = None
+    translation_cfg = notification_config.get("TRANSLATION") or {}
+    if isinstance(translation_cfg, dict) and translation_cfg.get("ENABLED"):
+        try:
+            from app.utils.config_loader import load_ai_config
+            from app.ai.translator import AITranslator
+
+            ai_config = load_ai_config()
+            translator = AITranslator(
+                ai_config,
+                enabled=True,
+                target_language=str(translation_cfg.get("TARGET_LANGUAGE") or "Chinese"),
+                cache_db_path=(str(translation_cfg.get("CACHE_DB_PATH") or "").strip() or None),
+                batch_size=int(translation_cfg.get("BATCH_SIZE") or 20),
+                temperature=float(translation_cfg.get("TEMPERATURE") or 0.2),
+            )
+            if translator and translator.enabled:
+                print(f"[翻译] 推送翻译已启用，目标语言: {translator.target_language}")
+            else:
+                translator = None
+        except Exception as e:
+            print(f"[翻译] 初始化翻译器失败，将跳过翻译: {e}")
+            translator = None
     
     # 如果没有提供 split_content_func，使用默认实现
     if split_content_func is None:
@@ -80,6 +105,7 @@ def send_important_news_to_all_channels(
         config=notification_config,
         get_time_func=get_time_func or (lambda: datetime.now()),
         split_content_func=split_content_func,
+        translator=translator,
     )
     
     # 使用 dispatcher 推送到所有渠道
@@ -206,7 +232,38 @@ def send_important_news_to_feishu(
     if not webhook_url:
         print("[重要新闻推送] 未配置飞书 Webhook URL，跳过推送")
         return False
-    
+
+    # 兼容：如果配置里启用了 TRANSLATION，则在该旧接口中也尝试翻译标题
+    try:
+        from app.utils.notification_config_loader import load_notification_config
+
+        notification_config = load_notification_config()
+        translation_cfg = notification_config.get("TRANSLATION") or {}
+
+        if isinstance(translation_cfg, dict) and translation_cfg.get("ENABLED"):
+            from app.utils.config_loader import load_ai_config
+            from app.ai.translator import AITranslator
+
+            ai_config = load_ai_config()
+            translator = AITranslator(
+                ai_config,
+                enabled=True,
+                target_language=str(translation_cfg.get("TARGET_LANGUAGE") or "Chinese"),
+                cache_db_path=(str(translation_cfg.get("CACHE_DB_PATH") or "").strip() or None),
+                batch_size=int(translation_cfg.get("BATCH_SIZE") or 20),
+                temperature=float(translation_cfg.get("TEMPERATURE") or 0.2),
+            )
+
+            if translator and translator.enabled:
+                titles = [n.get("title", "") for n in important_news]
+                result = translator.translate_batch(titles)
+                if result and result.success_count:
+                    for i, news in enumerate(important_news):
+                        if i < len(result.results) and result.results[i].success:
+                            news["title"] = result.results[i].translated_text
+    except Exception as e:
+        print(f"[翻译] 旧推送接口翻译失败，将使用原始标题: {e}")
+
     # 获取当前时间
     if get_time_func:
         now = get_time_func()

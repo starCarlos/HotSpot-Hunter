@@ -132,9 +132,9 @@ def format_rank_display(ranks: List[int], rank_threshold: int, format_type: str)
         highlight_start = "<font color='red'><strong>"
         highlight_end = "</strong></font>"
     elif format_type == "feishu":
-        # 飞书 text 类型消息不支持 HTML 标签和 Markdown，使用纯文本格式
-        highlight_start = ""
-        highlight_end = ""
+        # 飞书卡片 lark_md 支持 **加粗**
+        highlight_start = "**"
+        highlight_end = "**"
     elif format_type == "dingtalk":
         highlight_start = "**"
         highlight_end = "**"

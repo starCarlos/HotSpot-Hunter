@@ -55,10 +55,9 @@ def format_title_for_platform(
     keyword = title_data.get("matched_keyword", "") if show_keyword else ""
 
     if platform == "feishu":
-        # 飞书 text 类型消息不支持 HTML 标签和 Markdown，使用纯文本格式
+        # 飞书卡片 lark_md 格式：支持 [标题](url) 可点击链接、**加粗** 等
         if link_url:
-            # 纯文本格式：标题 + URL
-            formatted_title = f"{cleaned_title} {link_url}"
+            formatted_title = f"[{cleaned_title}]({link_url})"
         else:
             formatted_title = cleaned_title
 
@@ -72,9 +71,8 @@ def format_title_for_platform(
             result = f"{title_prefix}{formatted_title}"
 
         if rank_display:
-            # 清理 rank_display 中的 HTML 标签（如果有）
-            rank_clean = rank_display.replace("<font", "").replace("</font>", "").replace("color='grey'>", "").replace("color='red'>", "").replace("color='orange'>", "").strip()
-            result += f" {rank_clean}"
+            # lark_md 下 rank_display 已为 **加粗** 格式，无需再清 HTML
+            result += f" {rank_display}"
         if title_data["time_display"]:
             result += f" - {title_data['time_display']}"
         if title_data["count"] > 1:

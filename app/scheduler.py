@@ -140,14 +140,23 @@ def start_scheduler(
     启动全局调度器
     
     Args:
-        interval_hours: 抓取间隔（小时），默认从环境变量读取，或使用 1.0
+        interval_hours: 抓取与推送间隔（小时），未传时由 main 从配置/环境变量传入，默认 3 小时
         enabled: 是否启用，默认从环境变量读取，或使用 True
     """
     global _scheduler
     
-    # 从环境变量读取配置
+    # 未传入时从环境变量或推送配置读取（默认 3 小时）
     if interval_hours is None:
-        interval_hours = float(os.environ.get("CRAWL_INTERVAL_HOURS", "1.0"))
+        env_val = os.environ.get("CRAWL_INTERVAL_HOURS")
+        if env_val:
+            interval_hours = float(env_val)
+        else:
+            try:
+                from app.utils.notification_config_loader import load_notification_config
+                config = load_notification_config()
+                interval_hours = float(config.get("CRAWL_INTERVAL_HOURS", 3.0))
+            except Exception:
+                interval_hours = 3.0
     
     if enabled is None:
         enabled = os.environ.get("CRAWL_SCHEDULER_ENABLED", "true").lower() == "true"

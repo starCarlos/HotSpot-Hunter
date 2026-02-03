@@ -15,6 +15,7 @@
 每个发送函数都支持分批发送，并通过参数化配置实现与 CONFIG 的解耦。
 """
 
+import re
 import smtplib
 import time
 import json
@@ -31,6 +32,16 @@ import requests
 
 from .batch import add_batch_headers, get_max_batch_header_size
 from .formatters import convert_markdown_to_mrkdwn, strip_markdown
+
+
+def _feishu_lark_md_safe(content: str) -> str:
+    """将内容整理为飞书 lark_md 安全格式：保留 [文本](url)、**加粗** 等，仅去除残留 HTML 标签。"""
+    if not content:
+        return content
+    # 去除 HTML 标签，保留 Markdown 语法供 lark_md 渲染
+    text = re.sub(r"<font[^>]*>(.+?)</font>", r"\1", content)
+    text = re.sub(r"<[^>]+>", "", text)
+    return text.strip()
 
 
 def _render_ai_analysis(ai_analysis: Any, channel: str) -> str:
@@ -176,15 +187,24 @@ def send_to_feishu(
     if update_info:
         full_content += f"\nHotSpotHunter 发现新版本 {update_info['remote_version']}，当前 {update_info['current_version']}"
 
-    # 飞书 text 类型消息不支持 HTML 标签和 Markdown，需要转换为纯文本
-    from app.notification.formatters import strip_markdown
-    plain_content = strip_markdown(full_content)
+    # 飞书卡片消息：正文使用 lark_md 格式（[标题](url)、**加粗** 等），与 formatter 中 feishu 输出一致
+    card_content = _feishu_lark_md_safe(full_content)
 
-    # 飞书 webhook 只显示 content.text，所有信息都整合到 text 中
+    card_title = "热点推送"
+    if report_type and report_type not in ("daily", "current", "incremental"):
+        card_title = f"{card_title} - {report_type}"
+
     payload = {
-        "msg_type": "text",
-        "content": {
-            "text": plain_content,
+        "msg_type": "interactive",
+        "card": {
+            "config": {"wide_screen_mode": True},
+            "header": {
+                "title": {"tag": "plain_text", "content": card_title},
+                "template": "blue",
+            },
+            "elements": [
+                {"tag": "div", "text": {"tag": "lark_md", "content": card_content}}
+            ],
         },
     }
 
