@@ -3,8 +3,9 @@
 LLM 请求客户端（与业务逻辑解耦）
 
 该模块只负责与大模型 API 通信并返回文本结果：
-- OpenAI 兼容接口（DeepSeek / OpenAI / 其他兼容服务）
-- Google Gemini
+- OpenAI 兼容接口：DeepSeek、OpenAI、智谱(GLM/Zhipu)、MiniMax、月之暗面(Moonshot)、
+  通义(DashScope/Tongyi)、百川(Baichuan)、Ollama、vLLM 等，通过 provider 或 base_url 配置
+- Google Gemini（provider=gemini）
 
 不包含任何分析、翻译、渲染或业务决策逻辑。
 """
@@ -130,17 +131,32 @@ class LLMClient:
             extra_params=extra,
         )
 
+    # 主流厂商与自托管默认 API 地址（OpenAI 兼容或兼容格式）
+    _OPENAI_COMPATIBLE_URLS = {
+        "deepseek": "https://api.deepseek.com/v1/chat/completions",
+        "openai": "https://api.openai.com/v1/chat/completions",
+        "glm": "https://open.bigmodel.cn/api/paas/v4/chat/completions",
+        "zhipu": "https://open.bigmodel.cn/api/paas/v4/chat/completions",
+        "minimax": "https://api.minimax.io/v1/text/chatcompletion_v2",
+        "moonshot": "https://api.moonshot.cn/v1/chat/completions",
+        "dashscope": "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+        "tongyi": "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+        "baichuan": "https://api.baichuan-ai.com/v1/chat/completions",
+        "ollama": "http://localhost:11434/v1/chat/completions",
+        "vllm": "http://localhost:8000/v1/chat/completions",
+    }
+
     def _get_openai_compatible_endpoint(self) -> str:
         if self.config.base_url:
             return self.config.base_url
 
-        urls = {
-            "deepseek": "https://api.deepseek.com/v1/chat/completions",
-            "openai": "https://api.openai.com/v1/chat/completions",
-        }
-        url = urls.get((self.config.provider or "").strip().lower())
+        provider = (self.config.provider or "").strip().lower()
+        url = self._OPENAI_COMPATIBLE_URLS.get(provider)
         if not url:
-            raise ValueError(f"{self.config.provider} 需要配置 base_url（完整 API 地址）")
+            raise ValueError(
+                f"未知的 provider: {self.config.provider}。"
+                f"支持: {', '.join(sorted(self._OPENAI_COMPATIBLE_URLS.keys()))}，或配置 base_url"
+            )
         return url
 
     def _merged_extra_params(self, extra_params: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -161,14 +177,15 @@ class LLMClient:
     ) -> str:
         import requests
 
-        if not self.config.api_key:
+        url = self._get_openai_compatible_endpoint()
+        provider = (self.config.provider or "").strip().lower()
+        # Ollama / vLLM 等自托管通常无需 API Key，未配置时可不带 Authorization
+        if not self.config.api_key and provider not in ("ollama", "vllm"):
             raise ValueError("未配置 AI API Key")
 
-        url = self._get_openai_compatible_endpoint()
-        headers = {
-            "Authorization": f"Bearer {self.config.api_key}",
-            "Content-Type": "application/json",
-        }
+        headers: Dict[str, str] = {"Content-Type": "application/json"}
+        if self.config.api_key:
+            headers["Authorization"] = f"Bearer {self.config.api_key}"
 
         payload: Dict[str, Any] = {
             "model": self.config.model,

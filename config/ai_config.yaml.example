@@ -5,19 +5,20 @@
 api_key: ""
 
 # AI 提供商（可选，默认: deepseek）
-# 支持: deepseek, openai, gemini 等
+# 支持: deepseek, openai, gemini, glm, minimax, moonshot, dashscope, baichuan, ollama, vllm 等
+# 自托管: ollama(默认 http://localhost:11434), vllm(默认 http://localhost:8000)，可不填 api_key
 provider: "deepseek"
 
 # AI 模型名称（可选，默认: deepseek-chat）
-# DeepSeek: deepseek-chat, deepseek-chat-0324
-# OpenAI: gpt-3.5-turbo, gpt-4
-# Gemini: gemini-1.5-flash, gemini-1.5-pro
+# DeepSeek: deepseek-chat | 智谱: glm-4, glm-4-flash | MiniMax: M2-her
+# 月之暗面: moonshot-v1-8k | 通义: qwen-turbo | 百川: Baichuan2-Turbo
+# Ollama: 本地模型名如 qwen2.5:7b, llama3.2, deepseek-r1:8b
+# vLLM: 服务端配置的模型名
 model: "deepseek-chat"
 
 # API 基础URL（可选）
-# 如果为空，将使用默认URL
-# DeepSeek: https://api.deepseek.com/v1/chat/completions
-# OpenAI: https://api.openai.com/v1/chat/completions
+# 留空则按 provider 使用内置默认地址；自托管可改为如 http://host:11434/v1/chat/completions
+# 内置支持: deepseek, openai, glm, minimax, moonshot, dashscope, baichuan, ollama, vllm
 base_url: ""
 
 # 请求超时时间（秒，默认: 30）
