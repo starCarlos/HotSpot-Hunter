@@ -100,24 +100,31 @@ body {
     display: flex;
     align-items: center;
     gap: 8px;
+    flex-wrap: wrap;
 }
 
-.date-label {
+.date-range-label {
     font-size: 13px;
     color: var(--text-secondary);
+    font-weight: 500;
     white-space: nowrap;
 }
 
+.date-sep {
+    font-size: 13px;
+    color: var(--text-tertiary);
+}
+
 .date-picker {
-    padding: 8px 12px;
+    padding: 6px 10px;
     border: 1px solid var(--border-color);
-    border-radius: 4px;
-    font-size: 14px;
+    border-radius: 6px;
+    font-size: 13px;
     cursor: pointer;
     background: var(--bg-secondary);
     color: var(--text-primary);
-    transition: border-color 0.3s;
-    width: 140px;
+    transition: border-color 0.2s;
+    width: 132px;
 }
 
 .date-picker:hover {
@@ -127,6 +134,27 @@ body {
 .date-picker:focus {
     outline: none;
     border-color: var(--accent-color);
+}
+
+.date-presets {
+    display: flex;
+    gap: 6px;
+}
+
+.btn-preset {
+    padding: 6px 10px;
+    font-size: 12px;
+    color: var(--text-secondary);
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.btn-preset:hover {
+    border-color: var(--accent-color);
+    color: var(--accent-color);
 }
 
 .btn-refresh {

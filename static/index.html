@@ -15,10 +15,17 @@
                 <div class="header-actions">
                     <button id="themeToggle" class="btn-theme" title="切换主题">🌙</button>
                     <div class="date-range-picker">
-                        <label for="startDate" class="date-label">开始日期：</label>
-                        <input type="date" id="startDate" class="date-picker">
-                        <label for="endDate" class="date-label">结束日期：</label>
-                        <input type="date" id="endDate" class="date-picker">
+                        <span class="date-range-label">日期范围</span>
+                        <input type="date" id="startDate" class="date-picker" aria-label="开始日期">
+                        <span class="date-sep">至</span>
+                        <input type="date" id="endDate" class="date-picker" aria-label="结束日期">
+                        <div class="date-presets">
+                            <button type="button" class="btn-preset" data-preset="today">今天</button>
+                            <button type="button" class="btn-preset" data-preset="last3Days">三天内</button>
+                            <button type="button" class="btn-preset" data-preset="thisWeek">本周</button>
+                            <button type="button" class="btn-preset" data-preset="thisMonth">本月</button>
+                            <button type="button" class="btn-preset" data-preset="lastMonth">上月</button>
+                        </div>
                     </div>
                     <button id="refreshBtn" class="btn-refresh">刷新</button>
                 </div>

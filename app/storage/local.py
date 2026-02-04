@@ -208,12 +208,17 @@ class LocalStorageBackend(SQLiteStorageMixin, StorageBackend):
                     print("[重要性分析] 未配置AI API Key，跳过分析")
                     return
                 
-                # 收集需要分析的新闻（只分析新增的，已有importance的跳过）
+                # 收集需要分析的新闻（只分析新增的，已有importance的跳过；同一条新闻多平台只分析一次）
                 # 注意：data 中的新闻已经通过关键词和敏感词筛选，因此这里只分析筛选后的新闻
+                from app.utils.helpers import normalize_title_for_dedup
                 news_to_analyze = []
+                seen_normalized = set()
                 for platform_id, news_list in data.items.items():
                     platform_name = data.id_to_name.get(platform_id, platform_id)
                     for item in news_list:
+                        normalized_title = normalize_title_for_dedup(item.title)
+                        if normalized_title in seen_normalized:
+                            continue
                         # 检查是否已有重要性评级
                         existing_importance = self.get_news_importance(
                             title=item.title,
@@ -221,6 +226,7 @@ class LocalStorageBackend(SQLiteStorageMixin, StorageBackend):
                             date=date,
                         )
                         if not existing_importance:
+                            seen_normalized.add(normalized_title)
                             news_to_analyze.append({
                                 "title": item.title,
                                 "platform_id": platform_id,
@@ -232,64 +238,90 @@ class LocalStorageBackend(SQLiteStorageMixin, StorageBackend):
                     print("[重要性分析] 没有需要分析的新闻")
                     return
 
-                # 限制每次分析的数量，避免触发API速率限制
+                # 分批分析，每批 100 条，循环直到全部分析完
                 max_analyze_per_run = 100
-                if len(news_to_analyze) > max_analyze_per_run:
-                    print(f"[重要性分析] 发现 {len(news_to_analyze)} 条新闻，限制本次分析 {max_analyze_per_run} 条")
-                    news_to_analyze = news_to_analyze[:max_analyze_per_run]
-
-                print(f"[重要性分析] 开始批量分析 {len(news_to_analyze)} 条新闻的重要性...")
-
-                # 批量分析
                 get_time_func = lambda: datetime.now()
-                batch_results = batch_analyze_importance(
-                    news_items=news_to_analyze,
-                    ai_config=ai_config,
-                    get_time_func=get_time_func,
-                    batch_size=20,
-                )
+                total_saved = 0
+                important_news = []
+                import time as time_module
+
+                for start in range(0, len(news_to_analyze), max_analyze_per_run):
+                    chunk = news_to_analyze[start : start + max_analyze_per_run]
+                    batch_num = start // max_analyze_per_run + 1
+                    total_batches = (len(news_to_analyze) + max_analyze_per_run - 1) // max_analyze_per_run
+                    if total_batches > 1:
+                        print(f"[重要性分析] 第 {batch_num}/{total_batches} 批，分析 {len(chunk)} 条（共 {len(news_to_analyze)} 条）...")
+                    else:
+                        print(f"[重要性分析] 开始批量分析 {len(chunk)} 条新闻的重要性...")
+
+                    if start > 0:
+                        time_module.sleep(3)
+
+                    batch_results = batch_analyze_importance(
+                        news_items=chunk,
+                        ai_config=ai_config,
+                        get_time_func=get_time_func,
+                        batch_size=20,
+                    )
+
+                    for key, importance in batch_results.items():
+                        title, platform_id = key
+                        if self.update_news_importance(
+                            title=title,
+                            platform_id=platform_id,
+                            importance=importance,
+                            date=date,
+                        ):
+                            total_saved += 1
+                            if importance in ["critical", "high"]:
+                                platform_name = data.id_to_name.get(platform_id, platform_id)
+                                news_item = None
+                                for item in data.items.get(platform_id, []):
+                                    if item.title == title:
+                                        news_item = item
+                                        break
+                                important_news.append({
+                                    "title": title,
+                                    "platform_id": platform_id,
+                                    "platform_name": platform_name,
+                                    "rank": news_item.rank if news_item else 0,
+                                    "importance": importance,
+                                    "url": news_item.url if news_item else "",
+                                })
+
+                print(f"[重要性分析] 完成，成功分析并保存 {total_saved} 条新闻的重要性（共 {len(news_to_analyze)} 条待分析）")
                 
-                # 保存结果到数据库，并收集重要新闻
-                saved_count = 0
-                important_news = []  # 收集重要性为 critical 或 high 的新闻
-                
-                for key, importance in batch_results.items():
-                    title, platform_id = key
-                    if self.update_news_importance(
-                        title=title,
-                        platform_id=platform_id,
-                        importance=importance,
-                        date=date,
-                    ):
-                        saved_count += 1
-                        
-                        # 如果是重要新闻（critical 或 high），收集信息
-                        if importance in ["critical", "high"]:
-                            # 查找新闻的详细信息
-                            platform_name = data.id_to_name.get(platform_id, platform_id)
-                            news_item = None
-                            for item in data.items.get(platform_id, []):
-                                if item.title == title:
-                                    news_item = item
-                                    break
-                            
-                            important_news.append({
-                                "title": title,
-                                "platform_id": platform_id,
-                                "platform_name": platform_name,
-                                "rank": news_item.rank if news_item else 0,
-                                "importance": importance,
-                                "url": news_item.url if news_item else "",
-                            })
-                
-                print(f"[重要性分析] 完成，成功分析并保存 {saved_count} 条新闻的重要性")
-                
-                # 如果有重要新闻，推送到所有配置的渠道
+                # 如果有重要新闻，推送到所有配置的渠道（过滤已推送、同批次按 normalized_title 去重）
                 if important_news:
                     print(f"[重要新闻推送] 发现 {len(important_news)} 条重要新闻（critical/high），准备推送到所有配置的渠道...")
                     try:
                         from app.utils.notification_config_loader import load_notification_config
                         from app.notification.important_news_sender import send_important_news_to_all_channels
+                        from app.utils.helpers import normalize_title_for_dedup
+                        
+                        # 过滤已推送 + 同批次按 normalized_title 去重，同一标题只推一条
+                        news_to_push = []
+                        seen_normalized_this_batch = set()
+                        conn = self._get_connection(date)
+                        cursor = conn.cursor()
+                        for news in important_news:
+                            title = news["title"]
+                            platform_id = news["platform_id"]
+                            normalized_title = normalize_title_for_dedup(title)
+                            if normalized_title in seen_normalized_this_batch:
+                                continue
+                            cursor.execute(
+                                "SELECT 1 FROM news_items WHERE has_been_pushed = 1 AND normalized_title = ? LIMIT 1",
+                                (normalized_title,),
+                            )
+                            if cursor.fetchone():
+                                continue
+                            seen_normalized_this_batch.add(normalized_title)
+                            news_to_push.append(news)
+                        conn.close()
+                        
+                        if not news_to_push:
+                            print(f"[重要新闻推送] 所有重要新闻都已推送过或本批次已去重，无需推送")
                         
                         # 加载推送配置
                         notification_config = load_notification_config()
@@ -309,7 +341,8 @@ class LocalStorageBackend(SQLiteStorageMixin, StorageBackend):
                         
                         if not has_configured_channels:
                             print(f"[重要新闻推送] 未配置任何推送渠道，跳过推送")
-                        else:
+                        elif news_to_push:
+                            print(f"[重要新闻推送] 过滤后，需要推送 {len(news_to_push)} 条新闻（共 {len(important_news)} 条）")
                             # 创建内容分批函数
                             def split_content_func(content: str, size: int):
                                 """内容分批函数"""
@@ -336,7 +369,7 @@ class LocalStorageBackend(SQLiteStorageMixin, StorageBackend):
                             
                             # 推送到所有配置的渠道
                             results = send_important_news_to_all_channels(
-                                important_news=important_news,
+                                important_news=news_to_push,
                                 notification_config=notification_config,
                                 get_time_func=get_time_func,
                                 split_content_func=split_content_func,
@@ -349,6 +382,19 @@ class LocalStorageBackend(SQLiteStorageMixin, StorageBackend):
                             for channel, success in results.items():
                                 status = "✅" if success else "❌"
                                 print(f"[重要新闻推送] {status} {channel}")
+                            
+                            # 推送成功后标记为已推送（跨平台）
+                            if success_count > 0:
+                                conn = self._get_connection(date)
+                                cursor = conn.cursor()
+                                for news in news_to_push:
+                                    nt = normalize_title_for_dedup(news["title"])
+                                    cursor.execute(
+                                        "UPDATE news_items SET has_been_pushed = 1 WHERE normalized_title = ?",
+                                        (nt,),
+                                    )
+                                conn.commit()
+                                conn.close()
                     except Exception as e:
                         print(f"[重要新闻推送] 推送重要新闻时出错: {e}")
                         import traceback
@@ -390,8 +436,10 @@ class LocalStorageBackend(SQLiteStorageMixin, StorageBackend):
                 print("[重要性分析] 未找到数据，跳过分析")
                 return
             
-            # 收集需要分析的新闻（只分析新增的，已有importance的跳过，重复的新闻跳过，已推送的新闻跳过）
+            # 收集需要分析的新闻：同标题多平台只分析一次；仅当该 normalized_title 在所有平台都没有重要性时才分析
+            # （若任一同标题行已有重要性，说明推送过或已分析过，与之一致即可，不重复调用 AI）
             news_to_analyze = []
+            seen_normalized = set()
             conn = self._get_connection(date or all_data.date)
             cursor = conn.cursor()
             from app.utils.helpers import normalize_title_for_dedup
@@ -399,44 +447,32 @@ class LocalStorageBackend(SQLiteStorageMixin, StorageBackend):
             for platform_id, news_list in all_data.items.items():
                 platform_name = all_data.id_to_name.get(platform_id, platform_id)
                 for item in news_list:
-                    # 检查是否已有重要性评级
-                    existing_importance = self.get_news_importance(
-                        title=item.title,
-                        platform_id=platform_id,
-                        date=date or all_data.date,
-                    )
-                    if existing_importance:
-                        continue  # 已有重要性评级，跳过
-                    
-                    # 检查是否已推送过（使用标准化标题匹配，跨平台去重）
                     normalized_title = normalize_title_for_dedup(item.title)
+                    if normalized_title in seen_normalized:
+                        continue  # 同一条新闻多平台只分析一次
+                    # 若该标题在任意平台已有重要性，则不分析（与推送过的重要性一致，由回填脚本或展示层按 normalized_title 取）
                     cursor.execute("""
-                        SELECT has_been_pushed FROM news_items
-                        WHERE has_been_pushed = 1 AND normalized_title = ?
+                        SELECT 1 FROM news_items
+                        WHERE normalized_title = ? AND importance IS NOT NULL AND TRIM(importance) != ''
                         LIMIT 1
                     """, (normalized_title,))
-                    result = cursor.fetchone()
-                    if result:
-                        continue  # 已推送过，跳过（不论哪个平台）
+                    if cursor.fetchone():
+                        seen_normalized.add(normalized_title)
+                        continue  # 已有重要性（含同标题其他平台），跳过
                     
                     # 检查是否是重复的新闻
                     # 重复的新闻（数据完全相同）不进入AI分析和推送
-                    # 判断标准：last_time == first_time 且 count > 1 且没有排名历史变化
-                    # 或者更简单：last_time == first_time 且 count > 1（说明从未更新过）
                     if item.last_time and item.first_time:
                         try:
                             last_time_int = int(item.last_time) if item.last_time else 0
                             first_time_int = int(item.first_time) if item.first_time else 0
-                            # 如果 last_time == first_time 且 count > 1，说明是重复的新闻（从未更新过）
-                            # 第一次出现的新闻（count == 1）即使 last_time == first_time 也要分析
                             if last_time_int == first_time_int and item.count > 1:
-                                # 进一步检查：如果没有排名历史变化，确认是重复的
-                                # 如果 rank_timeline 为空或只有一个记录，说明是重复的
                                 if not item.rank_timeline or len(item.rank_timeline) <= 1:
                                     continue  # 重复的新闻，跳过
                         except (ValueError, TypeError):
-                            pass  # 如果转换失败，继续处理
+                            pass
                     
+                    seen_normalized.add(normalized_title)
                     news_to_analyze.append({
                         "title": item.title,
                         "platform_id": platform_id,
@@ -448,57 +484,59 @@ class LocalStorageBackend(SQLiteStorageMixin, StorageBackend):
                 print("[重要性分析] 没有需要分析的新闻")
                 return
 
-            # 限制每次分析的数量，避免触发API速率限制
+            # 分批分析，每批 max_analyze_per_run 条，循环直到全部分析完（避免只分析前 100 条）
             max_analyze_per_run = 100
-            if len(news_to_analyze) > max_analyze_per_run:
-                print(f"[重要性分析] 发现 {len(news_to_analyze)} 条新闻，限制本次分析 {max_analyze_per_run} 条")
-                news_to_analyze = news_to_analyze[:max_analyze_per_run]
-
-            print(f"[重要性分析] 开始批量分析 {len(news_to_analyze)} 条新闻的重要性...")
-
-            # 批量分析
             get_time_func = lambda: datetime.now()
-            batch_results = batch_analyze_importance(
-                news_items=news_to_analyze,
-                ai_config=ai_config,
-                get_time_func=get_time_func,
-                batch_size=20,
-            )
-            
-            # 保存结果到数据库，并收集重要新闻
-            saved_count = 0
-            important_news = []  # 收集重要性为 critical 或 high 的新闻
-            
-            for key, importance in batch_results.items():
-                title, platform_id = key
-                if self.update_news_importance(
-                    title=title,
-                    platform_id=platform_id,
-                    importance=importance,
-                    date=date or all_data.date,
-                ):
-                    saved_count += 1
-                    
-                    # 如果是重要新闻（critical 或 high），收集信息
-                    if importance in ["critical", "high"]:
-                        # 查找新闻的详细信息
-                        platform_name = all_data.id_to_name.get(platform_id, platform_id)
-                        news_item = None
-                        for item in all_data.items.get(platform_id, []):
-                            if item.title == title:
-                                news_item = item
-                                break
-                        
-                        important_news.append({
-                            "title": title,
-                            "platform_id": platform_id,
-                            "platform_name": platform_name,
-                            "rank": news_item.rank if news_item else 0,
-                            "importance": importance,
-                            "url": news_item.url if news_item else "",
-                        })
-            
-            print(f"[重要性分析] 完成，成功分析并保存 {saved_count} 条新闻的重要性")
+            total_saved = 0
+            important_news = []  # 收集所有批次中重要性为 critical 或 high 的新闻
+            import time as time_module
+
+            for start in range(0, len(news_to_analyze), max_analyze_per_run):
+                chunk = news_to_analyze[start : start + max_analyze_per_run]
+                batch_num = start // max_analyze_per_run + 1
+                total_batches = (len(news_to_analyze) + max_analyze_per_run - 1) // max_analyze_per_run
+                if total_batches > 1:
+                    print(f"[重要性分析] 第 {batch_num}/{total_batches} 批，分析 {len(chunk)} 条（共 {len(news_to_analyze)} 条）...")
+                else:
+                    print(f"[重要性分析] 开始批量分析 {len(chunk)} 条新闻的重要性...")
+
+                # 批次间短暂延迟，降低 API 限流风险
+                if start > 0:
+                    time_module.sleep(3)
+
+                batch_results = batch_analyze_importance(
+                    news_items=chunk,
+                    ai_config=ai_config,
+                    get_time_func=get_time_func,
+                    batch_size=20,
+                )
+
+                for key, importance in batch_results.items():
+                    title, platform_id = key
+                    if self.update_news_importance(
+                        title=title,
+                        platform_id=platform_id,
+                        importance=importance,
+                        date=date or all_data.date,
+                    ):
+                        total_saved += 1
+                        if importance in ["critical", "high"]:
+                            platform_name = all_data.id_to_name.get(platform_id, platform_id)
+                            news_item = None
+                            for item in all_data.items.get(platform_id, []):
+                                if item.title == title:
+                                    news_item = item
+                                    break
+                            important_news.append({
+                                "title": title,
+                                "platform_id": platform_id,
+                                "platform_name": platform_name,
+                                "rank": news_item.rank if news_item else 0,
+                                "importance": importance,
+                                "url": news_item.url if news_item else "",
+                            })
+
+            print(f"[重要性分析] 完成，成功分析并保存 {total_saved} 条新闻的重要性（共 {len(news_to_analyze)} 条待分析）")
             
             # 如果有重要新闻，推送到所有配置的渠道（同步执行）
             if important_news:
@@ -508,8 +546,9 @@ class LocalStorageBackend(SQLiteStorageMixin, StorageBackend):
                     from app.notification.important_news_sender import send_important_news_to_all_channels
                     from app.utils.time import get_timestamp
                     
-                    # 过滤已推送的新闻，避免重复推送
+                    # 过滤已推送的新闻，避免重复推送；同批次内按 normalized_title 去重，同一标题只推一条
                     news_to_push = []
+                    seen_normalized_this_batch = set()  # 本批次已加入的 normalized_title，避免多平台同标题重复推送
                     conn = self._get_connection(date or all_data.date)
                     cursor = conn.cursor()
                     
@@ -521,6 +560,10 @@ class LocalStorageBackend(SQLiteStorageMixin, StorageBackend):
                         
                         # 标准化标题（去除空格和符号，用于去重）
                         normalized_title = normalize_title_for_dedup(title)
+                        
+                        # 本批次已加入同一条（同 normalized_title 的另一平台），跳过
+                        if normalized_title in seen_normalized_this_batch:
+                            continue
                         
                         # 检查该新闻是否已在任何平台推送过（使用标准化标题匹配）
                         cursor.execute("""
@@ -539,6 +582,7 @@ class LocalStorageBackend(SQLiteStorageMixin, StorageBackend):
                             
                             continue
                         
+                        seen_normalized_this_batch.add(normalized_title)
                         news_to_push.append(news)
                     
                     if not news_to_push:

@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional
 
 from app.storage.base import NewsItem, NewsData, RSSItem, RSSData
 from app.utils.url import normalize_url
+from app.utils.helpers import normalize_title_for_dedup
 
 
 class SQLiteStorageMixin:
@@ -164,6 +165,7 @@ class SQLiteStorageMixin:
                             cursor.execute("UPDATE news_items SET normalized_title = ? WHERE id = ?", (normalized, row_id))
                         conn.commit()
                         print("[存储] 已按新规则重新填充所有新闻的 normalized_title（去掉所有标点）")
+                    # 回填 importance 由维护脚本 scripts/backfill_importance_by_normalized_title.py 执行，此处不再自动迁移
             except sqlite3.Error as e:
                 print(f"[存储] 迁移字段失败: {e}")
 
@@ -406,23 +408,33 @@ class SQLiteStorageMixin:
             conn = self._get_connection(date)
             cursor = conn.cursor()
 
-            # 获取所有新闻数据（包含 id 用于查询排名历史）
-            # 使用窗口函数去重：对于相同的 (title, platform_id)，只选择 last_crawl_time 最大的记录
+            # 获取所有新闻数据（包含 id、normalized_title 用于去重与包含关系过滤）
+            # 1) 按 (title, platform_id) 去重，取 last_crawl_time 最大的一条
+            # 2) 按 normalized_title 去重，同一条新闻多平台只保留一条（取 last_crawl_time 最大）
+            #    空 normalized_title 按 id 区分，不参与跨行去重
             cursor.execute("""
                 SELECT n.id, n.title, n.platform_id, p.name as platform_name,
                        n.rank, n.url, n.mobile_url,
                        n.first_crawl_time, n.last_crawl_time, n.crawl_count,
-                       n.importance
+                       n.importance, n.normalized_title
                 FROM (
                     SELECT *,
                            ROW_NUMBER() OVER (
-                               PARTITION BY title, platform_id 
+                               PARTITION BY COALESCE(NULLIF(TRIM(normalized_title), ''), 'id-' || id)
                                ORDER BY last_crawl_time DESC
-                           ) as rn
-                    FROM news_items
+                           ) as rn2
+                    FROM (
+                        SELECT *,
+                               ROW_NUMBER() OVER (
+                                   PARTITION BY title, platform_id
+                                   ORDER BY last_crawl_time DESC
+                               ) as rn
+                        FROM news_items
+                    ) t
+                    WHERE t.rn = 1
                 ) n
                 LEFT JOIN platforms p ON n.platform_id = p.id
-                WHERE n.rn = 1
+                WHERE n.rn2 = 1
                 ORDER BY n.platform_id, n.last_crawl_time
             """)
 
@@ -430,7 +442,23 @@ class SQLiteStorageMixin:
             if not rows:
                 return None
 
-            # 收集所有 news_item_id
+            # 3) 过滤：若某条的 normalized_title 是另一条的「子串」，则不显示（保留更完整的那条）
+            #    例如「腾讯元宝AI红包...」被「被微信封杀链接后腾讯元宝AI红包...」包含，则只保留后者
+            NORMALIZED_TITLE_INDEX = 11
+            def _nt(row):
+                return (row[NORMALIZED_TITLE_INDEX] or "").strip()
+
+            rows = [
+                row for i, row in enumerate(rows)
+                if not any(
+                    _nt(row) != _nt(rows[j])
+                    and _nt(row) in _nt(rows[j])
+                    for j in range(len(rows))
+                    if j != i
+                )
+            ]
+
+            # 收集所有 news_item_id（过滤后的 rows）
             news_ids = [row[0] for row in rows]
 
             # 批量查询排名历史（同时获取时间和排名）
@@ -716,30 +744,25 @@ class SQLiteStorageMixin:
             # 获取当前批次时间（转换为整数时间戳进行比较）
             current_time = int(current_data.crawl_time) if isinstance(current_data.crawl_time, str) else current_data.crawl_time
 
-            # 收集历史标题（first_time < current_time 的标题）
-            # 这样可以正确处理同一标题因 URL 变化而产生多条记录的情况
-            historical_titles: Dict[str, set] = {}
+            # 收集历史已出现的标准化标题（first_time < current_time）
+            # 按 normalized_title 判断，同一条新闻多平台只算一次
+            historical_normalized: set = set()
             for source_id, news_list in historical_data.items.items():
-                historical_titles[source_id] = set()
                 for item in news_list:
                     first_time = getattr(item, 'first_time', item.crawl_time)
-                    # 转换为整数时间戳进行比较
                     first_time_int = int(first_time) if isinstance(first_time, str) else first_time
                     if first_time_int < current_time:
-                        historical_titles[source_id].add(item.title)
+                        historical_normalized.add(normalize_title_for_dedup(item.title))
 
-            # 检查是否有历史数据
-            has_historical_data = any(len(titles) > 0 for titles in historical_titles.values())
-            if not has_historical_data:
-                # 第一次抓取，没有"新增"概念
+            if not historical_normalized:
                 return {}
 
-            # 检测新增
+            # 检测新增：当前条目的标准化标题未在历史中出现过
             new_titles = {}
             for source_id, news_list in current_data.items.items():
-                hist_set = historical_titles.get(source_id, set())
                 for item in news_list:
-                    if item.title not in hist_set:
+                    nt = normalize_title_for_dedup(item.title)
+                    if nt not in historical_normalized:
                         if source_id not in new_titles:
                             new_titles[source_id] = {}
                         new_titles[source_id][item.title] = item
@@ -1209,27 +1232,31 @@ class SQLiteStorageMixin:
         date: Optional[str] = None,
     ) -> bool:
         """
-        更新新闻的重要性评级
+        更新新闻的重要性评级。
+
+        按 normalized_title 更新，使同一条新闻在所有平台的记录都得到相同评级，
+        这样展示层按 normalized_title 去重后显示的那条也会有评级。
 
         Args:
             title: 新闻标题
-            platform_id: 平台ID
+            platform_id: 平台ID（保留参数兼容，实际按 normalized_title 更新）
             importance: 重要性评级 ('critical'|'high'|'medium'|'low')
             date: 日期，默认为今天
 
         Returns:
-            是否更新成功
+            是否更新成功（至少更新了一行）
         """
         try:
             conn = self._get_connection(date)
             cursor = conn.cursor()
+            normalized_title = normalize_title_for_dedup(title)
 
-            # 更新重要性（匹配标题和平台ID）
+            # 按标准化标题更新，同一条新闻多平台共享同一评级
             cursor.execute("""
                 UPDATE news_items
                 SET importance = ?, updated_at = CURRENT_TIMESTAMP
-                WHERE title = ? AND platform_id = ?
-            """, (importance, title, platform_id))
+                WHERE normalized_title = ?
+            """, (importance, normalized_title))
 
             conn.commit()
             return cursor.rowcount > 0
@@ -1280,6 +1307,8 @@ class SQLiteStorageMixin:
         """
         批量获取新闻的重要性评级
 
+        为避免 SQLite 表达式树深度限制（max depth 1000），按批查询，每批最多 200 条。
+
         Args:
             news_items: 新闻项列表，每个项包含 title 和 platform_id
             date: 日期，默认为今天
@@ -1291,35 +1320,39 @@ class SQLiteStorageMixin:
         if not news_items:
             return results
 
+        # 每批条数，避免 WHERE 中 OR 过多导致 "Expression tree is too large (maximum depth 1000)"
+        batch_size = 200
+
         try:
             conn = self._get_connection(date)
             cursor = conn.cursor()
 
-            # 构建查询条件
-            conditions = []
-            params = []
-            for item in news_items:
-                title = item.get("title", "")
-                platform_id = item.get("platform_id", "")
-                if title and platform_id:
-                    conditions.append("(title = ? AND platform_id = ?)")
-                    params.extend([title, platform_id])
-
-            if not conditions:
+            valid_items = [
+                (item.get("title", ""), item.get("platform_id", ""))
+                for item in news_items
+                if item.get("title") and item.get("platform_id")
+            ]
+            if not valid_items:
                 return results
 
-            # 批量查询
-            query = f"""
-                SELECT title, platform_id, importance
-                FROM news_items
-                WHERE {' OR '.join(conditions)}
-            """
-            cursor.execute(query, params)
+            for i in range(0, len(valid_items), batch_size):
+                chunk = valid_items[i : i + batch_size]
+                conditions = ["(title = ? AND platform_id = ?)"] * len(chunk)
+                params = []
+                for title, platform_id in chunk:
+                    params.extend([title, platform_id])
 
-            for row in cursor.fetchall():
-                title, platform_id, importance = row
-                if importance:
-                    results[(title, platform_id)] = importance
+                query = f"""
+                    SELECT title, platform_id, importance
+                    FROM news_items
+                    WHERE {' OR '.join(conditions)}
+                """
+                cursor.execute(query, params)
+
+                for row in cursor.fetchall():
+                    title, platform_id, importance = row
+                    if importance:
+                        results[(title, platform_id)] = importance
 
             return results
         except Exception as e:

@@ -1,0 +1,288 @@
+# RSS 订阅配置
+# 来源: The Most Popular Blogs of Hacker News in 2025
+# https://gist.github.com/emschwartz/e6d2bf860ccc367fe37ff953ba6de66b
+
+enabled: true
+request_interval: 2000
+timeout: 15
+freshness_filter:
+  enabled: true
+  max_age_days: 7
+
+feeds:
+  - id: simonwillison-net
+    name: simonwillison.net
+    url: https://simonwillison.net/atom/everything/
+  - id: jeffgeerling-com
+    name: jeffgeerling.com
+    url: https://www.jeffgeerling.com/blog.xml
+  - id: seangoedecke-com
+    name: seangoedecke.com
+    url: https://www.seangoedecke.com/rss.xml
+  - id: krebsonsecurity-com
+    name: krebsonsecurity.com
+    url: https://krebsonsecurity.com/feed/
+  - id: daringfireball-net
+    name: daringfireball.net
+    url: https://daringfireball.net/feeds/main
+  - id: ericmigi-com
+    name: ericmigi.com
+    url: https://ericmigi.com/rss.xml
+  - id: antirez-com
+    name: antirez.com
+    url: https://antirez.com/rss
+  - id: idiallo-com
+    name: idiallo.com
+    url: https://idiallo.com/feed.rss
+  - id: maurycyz-com
+    name: maurycyz.com
+    url: https://maurycyz.com/index.xml
+  - id: pluralistic-net
+    name: pluralistic.net
+    url: https://pluralistic.net/feed/
+  - id: shkspr-mobi
+    name: shkspr.mobi
+    url: https://shkspr.mobi/blog/feed/
+  - id: lcamtuf-substack
+    name: lcamtuf.substack.com
+    url: https://lcamtuf.substack.com/feed
+  - id: mitchellh-com
+    name: mitchellh.com
+    url: https://mitchellh.com/feed.xml
+  - id: dynomight-net
+    name: dynomight.net
+    url: https://dynomight.net/feed.xml
+  - id: utcc-cks
+    name: utcc.utoronto.ca/~cks
+    url: https://utcc.utoronto.ca/~cks/space/blog/?atom
+  - id: xeiaso-net
+    name: xeiaso.net
+    url: https://xeiaso.net/blog.rss
+  - id: devblogs-oldnewthing
+    name: devblogs.microsoft.com/oldnewthing
+    url: https://devblogs.microsoft.com/oldnewthing/feed
+  - id: righto-com
+    name: righto.com
+    url: https://www.righto.com/feeds/posts/default
+  - id: lucumr-pocoo
+    name: lucumr.pocoo.org
+    url: https://lucumr.pocoo.org/feed.atom
+  - id: skyfall-dev
+    name: skyfall.dev
+    url: https://skyfall.dev/rss.xml
+  - id: garymarcus-substack
+    name: garymarcus.substack.com
+    url: https://garymarcus.substack.com/feed
+  - id: rachelbythebay-com
+    name: rachelbythebay.com
+    url: https://rachelbythebay.com/w/atom.xml
+  - id: overreacted-io
+    name: overreacted.io
+    url: https://overreacted.io/rss.xml
+  - id: timsh-org
+    name: timsh.org
+    url: https://timsh.org/rss/
+  - id: johndcook-com
+    name: johndcook.com
+    url: https://www.johndcook.com/blog/feed/
+  - id: gilesthomas-com
+    name: gilesthomas.com
+    url: https://gilesthomas.com/feed/rss.xml
+  - id: matklad-github
+    name: matklad.github.io
+    url: https://matklad.github.io/feed.xml
+  - id: derekthompson-org
+    name: derekthompson.org
+    url: https://www.theatlantic.com/feed/author/derek-thompson/
+  - id: evanhahn-com
+    name: evanhahn.com
+    url: https://evanhahn.com/feed.xml
+  - id: terriblesoftware-org
+    name: terriblesoftware.org
+    url: https://terriblesoftware.org/feed/
+  - id: rakhim-exotext
+    name: rakhim.exotext.com
+    url: https://rakhim.exotext.com/rss.xml
+  - id: joanwestenberg-com
+    name: joanwestenberg.com
+    url: https://joanwestenberg.com/rss
+  - id: xania-org
+    name: xania.org
+    url: https://xania.org/feed
+  - id: micahflee-com
+    name: micahflee.com
+    url: https://micahflee.com/feed/
+  - id: nesbitt-io
+    name: nesbitt.io
+    url: https://nesbitt.io/feed.xml
+  - id: construction-physics-com
+    name: construction-physics.com
+    url: https://www.construction-physics.com/feed
+  - id: tedium-co
+    name: tedium.co
+    url: https://feed.tedium.co/
+  - id: susam-net
+    name: susam.net
+    url: https://susam.net/feed.xml
+  - id: entropicthoughts-com
+    name: entropicthoughts.com
+    url: https://entropicthoughts.com/feed.xml
+  - id: buttondown-hillelwayne
+    name: buttondown.com/hillelwayne
+    url: https://buttondown.com/hillelwayne/rss
+  - id: dwarkesh-com
+    name: dwarkesh.com
+    url: https://www.dwarkeshpatel.com/feed
+  - id: borretti-me
+    name: borretti.me
+    url: https://borretti.me/feed.xml
+  - id: wheresyoured-at
+    name: wheresyoured.at
+    url: https://www.wheresyoured.at/rss/
+  - id: jayd-ml
+    name: jayd.ml
+    url: https://jayd.ml/feed.xml
+  - id: minimaxir-com
+    name: minimaxir.com
+    url: https://minimaxir.com/index.xml
+  - id: geohot-github
+    name: geohot.github.io
+    url: https://geohot.github.io/blog/feed.xml
+  - id: paulgraham-com
+    name: paulgraham.com
+    url: https://www.aaronsw.com/2002/feeds/pgessays.rss
+  - id: filfre-net
+    name: filfre.net
+    url: https://www.filfre.net/feed/
+  - id: blog-jim-nielsen
+    name: blog.jim-nielsen.com
+    url: https://blog.jim-nielsen.com/feed.xml
+  - id: dfarq-homeip
+    name: dfarq.homeip.net
+    url: https://dfarq.homeip.net/feed/
+  - id: jyn-dev
+    name: jyn.dev
+    url: https://jyn.dev/atom.xml
+  - id: geoffreylitt-com
+    name: geoffreylitt.com
+    url: https://www.geoffreylitt.com/feed.xml
+  - id: downtowndougbrown-com
+    name: downtowndougbrown.com
+    url: https://www.downtowndougbrown.com/feed/
+  - id: brutecat-com
+    name: brutecat.com
+    url: https://brutecat.com/rss.xml
+  - id: eli-thegreenplace
+    name: eli.thegreenplace.net
+    url: https://eli.thegreenplace.net/feeds/all.atom.xml
+  - id: abortretry-fail
+    name: abortretry.fail
+    url: https://www.abortretry.fail/feed
+  - id: fabiensanglard-net
+    name: fabiensanglard.net
+    url: https://fabiensanglard.net/rss.xml
+  - id: oldvcr-blogspot
+    name: oldvcr.blogspot.com
+    url: https://oldvcr.blogspot.com/feeds/posts/default
+  - id: bogdanthegeek-github
+    name: bogdanthegeek.github.io
+    url: https://bogdanthegeek.github.io/blog/index.xml
+  - id: hugotunius-se
+    name: hugotunius.se
+    url: https://hugotunius.se/feed.xml
+  - id: gwern-substack
+    name: gwern.net
+    url: https://gwern.substack.com/feed
+  - id: berthub-eu
+    name: berthub.eu
+    url: https://berthub.eu/articles/index.xml
+  - id: chadnauseam-com
+    name: chadnauseam.com
+    url: https://chadnauseam.com/rss.xml
+  - id: simone-org
+    name: simone.org
+    url: https://simone.org/feed/
+  - id: it-notes-dragas
+    name: it-notes.dragas.net
+    url: https://it-notes.dragas.net/feed/
+  - id: beej-us
+    name: beej.us
+    url: https://beej.us/blog/rss.xml
+  - id: hey-paris
+    name: hey.paris
+    url: https://hey.paris/index.xml
+  - id: danielwirtz-com
+    name: danielwirtz.com
+    url: https://danielwirtz.com/rss.xml
+  - id: matduggan-com
+    name: matduggan.com
+    url: https://matduggan.com/rss/
+  - id: refactoringenglish-com
+    name: refactoringenglish.com
+    url: https://refactoringenglish.com/index.xml
+  - id: worksonmymachine-substack
+    name: worksonmymachine.substack.com
+    url: https://worksonmymachine.substack.com/feed
+  - id: philiplaine-com
+    name: philiplaine.com
+    url: https://philiplaine.com/index.xml
+  - id: steveblank-com
+    name: steveblank.com
+    url: https://steveblank.com/feed/
+  - id: bernsteinbear-com
+    name: bernsteinbear.com
+    url: https://bernsteinbear.com/feed.xml
+  - id: danieldelaney-net
+    name: danieldelaney.net
+    url: https://danieldelaney.net/feed
+  - id: troyhunt-com
+    name: troyhunt.com
+    url: https://www.troyhunt.com/rss/
+  - id: herman-bearblog
+    name: herman.bearblog.dev
+    url: https://herman.bearblog.dev/feed/
+  - id: tomrenner-com
+    name: tomrenner.com
+    url: https://tomrenner.com/index.xml
+  - id: blog-pixelmelt
+    name: blog.pixelmelt.dev
+    url: https://blog.pixelmelt.dev/rss/
+  - id: martinalderson-com
+    name: martinalderson.com
+    url: https://martinalderson.com/feed.xml
+  - id: danielchasehooper-com
+    name: danielchasehooper.com
+    url: https://danielchasehooper.com/feed.xml
+  - id: chiark-sgtatham
+    name: chiark.greenend.org.uk/~sgtatham
+    url: https://www.chiark.greenend.org.uk/~sgtatham/quasiblog/feed.xml
+  - id: grantslatton-com
+    name: grantslatton.com
+    url: https://grantslatton.com/rss.xml
+  - id: experimental-history-com
+    name: experimental-history.com
+    url: https://www.experimental-history.com/feed
+  - id: anildash-com
+    name: anildash.com
+    url: https://anildash.com/feed.xml
+  - id: aresluna-org
+    name: aresluna.org
+    url: https://aresluna.org/main.rss
+  - id: michael-stapelberg
+    name: michael.stapelberg.ch
+    url: https://michael.stapelberg.ch/feed.xml
+  - id: miguelgrinberg-com
+    name: miguelgrinberg.com
+    url: https://blog.miguelgrinberg.com/feed
+  - id: keygen-sh
+    name: keygen.sh
+    url: https://keygen.sh/blog/feed.xml
+  - id: mjg59-dreamwidth
+    name: mjg59.dreamwidth.org
+    url: https://mjg59.dreamwidth.org/data/rss
+  - id: computer-rip
+    name: computer.rip
+    url: https://computer.rip/rss.xml
+  - id: tedunangst-com
+    name: tedunangst.com
+    url: https://www.tedunangst.com/flak/rss

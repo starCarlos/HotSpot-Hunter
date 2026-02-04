@@ -9,6 +9,7 @@
 - [关键词和敏感词配置](#关键词和敏感词配置)
 - [平台类型配置](#平台类型配置)
 - [推送配置](#推送配置)
+- [RSS 订阅配置](#rss-订阅配置)
 - [快速开始](#快速开始)
 - [注意事项](#注意事项)
 - [验证配置](#验证配置)
@@ -24,6 +25,7 @@
 3. **屏蔽词配置**: `config/blocked_words.txt` - 屏蔽词配置（用于过滤不想看到的内容）
 4. **平台类型配置**: `config/platform_types.yaml` - 平台分类配置
 5. **推送配置**: `config/notification_config.yaml` - 推送渠道配置（可选）
+6. **RSS 订阅配置**: `config/rss_config.yaml` - RSS 源列表（用于 RSS 抓取与推送）
 
 ---
 
@@ -267,6 +269,54 @@ FEISHU_WEBHOOK_URL: "url1;url2;url3"
 ### 新闻抓取与推送间隔
 
 - **CRAWL_INTERVAL_HOURS**（`notification_config.yaml` 或环境变量）：新闻抓取和推送的定时间隔（小时），默认 **3**。API 启动后，调度器按此间隔执行抓取并推送重要新闻。环境变量优先于配置文件。
+
+---
+
+## RSS 订阅配置
+
+### 配置文件位置
+
+`config/rss_config.yaml`
+
+### 说明
+
+RSS 源列表用于 RSS 抓取与推送。项目已内置 **Hacker News 2025 热门博客** 列表（来源：[The Most Popular Blogs of Hacker News in 2025](https://gist.github.com/emschwartz/e6d2bf860ccc367fe37ff953ba6de66b)），包含 90+ 个博客的 RSS/Atom 地址。
+
+### 配置格式
+
+```yaml
+enabled: true
+request_interval: 2000
+timeout: 15
+freshness_filter:
+  enabled: true
+  max_age_days: 7
+
+feeds:
+  - id: simonwillison-net
+    name: simonwillison.net
+    url: https://simonwillison.net/atom/everything/
+  - id: jeffgeerling-com
+    name: jeffgeerling.com
+    url: https://www.jeffgeerling.com/blog.xml
+  # ... 更多源
+```
+
+- **id**：源唯一标识（建议用域名 slug）
+- **name**：显示名称
+- **url**：RSS/Atom 地址
+- 可选：**max_items**（单源最大条数，0=不限制）、**max_age_days**（文章最大天数）、**enabled**（是否启用）
+
+### 代码中使用
+
+```python
+from app.utils.rss_config_loader import load_rss_config
+from app.crawler.rss import RSSFetcher
+
+config = load_rss_config()
+fetcher = RSSFetcher.from_config(config)
+rss_data = fetcher.fetch_all()
+```
 
 ---
 

@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, Query
 from typing import Optional, List, Dict, Union
 from datetime import datetime, timedelta
 from pathlib import Path
+import asyncio
 import os
 import yaml
 
@@ -40,6 +41,15 @@ def _load_platform_types() -> Dict[str, List[str]]:
         "forums": ["v2ex", "zhihu", "weibo", "hupu", "tieba", "douyin", "bilibili", "nowcoder", "juejin", "douban"],
         "news": ["zaobao", "36kr", "toutiao", "ithome", "thepaper", "cls", "tencent", "sspai"]
     }
+
+
+def _trigger_importance_analysis(storage_manager, dates_to_analyze: List[str]) -> None:
+    """在后台线程中依次对指定日期（或月份）运行重要性分析，不阻塞 API 响应。"""
+    for d in dates_to_analyze:
+        try:
+            storage_manager.analyze_all_news_importance(d)
+        except Exception as e:
+            print(f"[API] 后台重要性分析失败 ({d}): {e}")
 
 
 def _get_platform_category(platform_id: str, platform_types: Dict[str, List[str]]) -> str:
@@ -235,10 +245,10 @@ async def get_filtered_news(
         # 加载平台类型配置
         platform_types = _load_platform_types()
         
-        # 筛选新闻
+        # 筛选新闻（数据已在存储层按 normalized_title 去重，同一条新闻多平台只保留一条）
         filtered_items = []
         keyword_stats = {}  # 统计每个关键词的数量
-        seen_items = set()  # 用于去重：记录已处理的 (platform_id, title) 组合
+        seen_items = set()  # 去重：已处理的 (platform_id, title)
         
         for platform_id, news_list in data.items.items():
             platform_name = data.id_to_name.get(platform_id, platform_id)
@@ -251,7 +261,7 @@ async def get_filtered_news(
             for item in news_list:
                 title = item.title
                 
-                # 去重：检查是否已经处理过相同的 (platform_id, title) 组合
+                # 去重：同一平台内相同标题只算一条
                 item_key = (platform_id, title)
                 if item_key in seen_items:
                     continue
@@ -355,6 +365,23 @@ async def get_filtered_news(
             "low": sum(1 for item in filtered_items if item.get("importance", "").strip().lower() == "low"),
             "unrated": sum(1 for item in filtered_items if not item.get("importance", "").strip()),
         }
+        
+        # 若有未评级，在后台触发对应日期/月份的重要性分析（不阻塞本次响应）
+        if importance_stats.get("unrated", 0) > 0:
+            if start_date and end_date:
+                start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+                end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+                months_set = set()
+                cur = start_dt
+                while cur <= end_dt:
+                    months_set.add((cur.year, cur.month))
+                    cur += timedelta(days=1)
+                dates_to_analyze = [f"{y}-{m:02d}-01" for (y, m) in sorted(months_set)]
+            else:
+                dates_to_analyze = [query_date]
+            loop = asyncio.get_event_loop()
+            loop.run_in_executor(None, _trigger_importance_analysis, storage_manager, dates_to_analyze)
+            print(f"[API] 检测到未评级 {importance_stats['unrated']} 条，已触发后台重要性分析: {dates_to_analyze}")
         
         # 获取所有关键词列表（按数量排序）
         keywords = sorted(

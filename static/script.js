@@ -13,17 +13,23 @@ let allKeywords = []; // 保存所有关键词，用于在切换筛选时恢复
 let importanceStats = {};
 let savedKeyword = ''; // 保存切换重要性时之前选中的关键词
 
-// 获取本月第一天和今天的日期
+// 按本地时间格式化为 YYYY-MM-DD（避免 toISOString 时区导致当月1号变成上月31号）
+function formatLocalDate(d) {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+}
+
+// 获取本月第一天和今天的日期（每月从 1 号开始）
 function getCurrentMonthRange() {
     const now = new Date();
     const year = now.getFullYear();
     const month = now.getMonth();
     const firstDay = new Date(year, month, 1);
-    const today = new Date();
-    
     return {
-        start: firstDay.toISOString().split('T')[0],
-        end: today.toISOString().split('T')[0]
+        start: formatLocalDate(firstDay),
+        end: formatLocalDate(now)
     };
 }
 
@@ -36,87 +42,87 @@ document.addEventListener('DOMContentLoaded', () => {
     loadNews();
 });
 
-// 初始化日期选择器
+// 初始化日期选择器（支持跨月：仅要求 开始 ≤ 结束 ≤ 今天）
 function initDatePicker() {
     const startDateInput = document.getElementById('startDate');
     const endDateInput = document.getElementById('endDate');
     
-    // 设置默认值：本月1号到今天
+    const todayStr = formatLocalDate(new Date());
     const monthRange = getCurrentMonthRange();
     startDate = monthRange.start;
     endDate = monthRange.end;
     
     startDateInput.value = startDate;
     endDateInput.value = endDate;
+    startDateInput.max = todayStr;
+    endDateInput.max = todayStr;
+    endDateInput.min = startDate;
+    // 开始日期不设 min，方便选任意历史月份
     
-    // 设置最大日期为今天
-    const today = new Date().toISOString().split('T')[0];
-    startDateInput.max = today;
-    endDateInput.max = today;
-    
-    // 开始日期变化时，限制结束日期范围
-    startDateInput.addEventListener('change', (e) => {
-        const selectedStart = e.target.value;
+    function onStartChange() {
+        const selectedStart = startDateInput.value;
         if (!selectedStart) return;
-        
-        // 获取选中日期的月份
-        const startDateObj = new Date(selectedStart);
-        const year = startDateObj.getFullYear();
-        const month = startDateObj.getMonth();
-        
-        // 计算该月的第一天和最后一天
-        const firstDay = new Date(year, month, 1);
-        const lastDay = new Date(year, month + 1, 0);
-        const todayObj = new Date();
-        
-        // 结束日期不能早于开始日期，不能晚于该月最后一天或今天（取较小值）
-        const maxEndDate = lastDay > todayObj ? todayObj : lastDay;
-        const minEndDate = firstDay > new Date(selectedStart) ? firstDay : new Date(selectedStart);
-        
-        endDateInput.min = minEndDate.toISOString().split('T')[0];
-        endDateInput.max = maxEndDate.toISOString().split('T')[0];
-        
-        // 如果当前结束日期不在范围内，自动调整
-        const currentEnd = new Date(endDateInput.value);
-        if (currentEnd < minEndDate || currentEnd > maxEndDate) {
-            endDateInput.value = maxEndDate.toISOString().split('T')[0];
+        endDateInput.min = selectedStart;
+        endDateInput.max = todayStr;
+        const endVal = endDateInput.value;
+        if (endVal && (endVal < selectedStart || endVal > todayStr)) {
+            endDateInput.value = endVal < selectedStart ? selectedStart : todayStr;
         }
-        
         startDate = selectedStart;
         endDate = endDateInput.value;
         loadNews();
-    });
+    }
     
-    // 结束日期变化时，限制开始日期范围
-    endDateInput.addEventListener('change', (e) => {
-        const selectedEnd = e.target.value;
+    function onEndChange() {
+        const selectedEnd = endDateInput.value;
         if (!selectedEnd) return;
-        
-        // 获取选中日期的月份
-        const endDateObj = new Date(selectedEnd);
-        const year = endDateObj.getFullYear();
-        const month = endDateObj.getMonth();
-        
-        // 计算该月的第一天
-        const firstDay = new Date(year, month, 1);
-        const todayObj = new Date();
-        
-        // 开始日期不能晚于结束日期，不能早于该月第一天
-        const minStartDate = firstDay;
-        const maxStartDate = endDateObj > todayObj ? todayObj : endDateObj;
-        
-        startDateInput.min = minStartDate.toISOString().split('T')[0];
-        startDateInput.max = maxStartDate.toISOString().split('T')[0];
-        
-        // 如果当前开始日期不在范围内，自动调整
-        const currentStart = new Date(startDateInput.value);
-        if (currentStart < minStartDate || currentStart > maxStartDate) {
-            startDateInput.value = minStartDate.toISOString().split('T')[0];
+        startDateInput.max = selectedEnd;
+        const startVal = startDateInput.value;
+        if (startVal && startVal > selectedEnd) {
+            startDateInput.value = selectedEnd;
         }
-        
         startDate = startDateInput.value;
         endDate = selectedEnd;
         loadNews();
+    }
+    
+    startDateInput.addEventListener('change', onStartChange);
+    endDateInput.addEventListener('change', onEndChange);
+
+    // 快捷：今天、三天内、本周、本月、上月（使用本地时间）
+    document.querySelectorAll('.btn-preset').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const today = new Date();
+            const preset = btn.dataset.preset;
+            if (preset === 'today') {
+                startDateInput.value = formatLocalDate(today);
+                endDateInput.value = formatLocalDate(today);
+            } else if (preset === 'last3Days') {
+                const threeDaysAgo = new Date(today);
+                threeDaysAgo.setDate(today.getDate() - 2); // 含今天共 3 天
+                startDateInput.value = formatLocalDate(threeDaysAgo);
+                endDateInput.value = formatLocalDate(today);
+            } else if (preset === 'thisWeek') {
+                const dayOfWeek = today.getDay(); // 0 周日, 1 周一, ...
+                const daysFromMonday = dayOfWeek === 0 ? 6 : dayOfWeek - 1; // 本周一
+                const monday = new Date(today);
+                monday.setDate(today.getDate() - daysFromMonday);
+                startDateInput.value = formatLocalDate(monday);
+                endDateInput.value = formatLocalDate(today);
+            } else if (preset === 'thisMonth') {
+                startDateInput.value = formatLocalDate(new Date(today.getFullYear(), today.getMonth(), 1));
+                endDateInput.value = formatLocalDate(today);
+            } else if (preset === 'lastMonth') {
+                startDateInput.value = formatLocalDate(new Date(today.getFullYear(), today.getMonth() - 1, 1));
+                endDateInput.value = formatLocalDate(new Date(today.getFullYear(), today.getMonth(), 0));
+            }
+            endDateInput.min = startDateInput.value;
+            endDateInput.max = todayStr;
+            startDateInput.max = endDateInput.value;
+            startDate = startDateInput.value;
+            endDate = endDateInput.value;
+            loadNews();
+        });
     });
 }
 
@@ -459,30 +465,30 @@ function renderNews(news) {
     }).join('');
 }
 
-// 格式化时间（将 Unix 时间戳转换为 YYYY-MM-DD HH:MM:SS 格式）
+// 格式化时间：支持 Unix 秒/毫秒，按本地时间显示为简洁格式（不含秒）
 function formatTime(timeStr) {
     if (!timeStr) return '';
-    
-    // 如果是 Unix 时间戳（数字字符串）
     const timestamp = parseInt(timeStr);
-    if (!isNaN(timestamp) && timestamp > 0) {
-        const date = new Date(timestamp * 1000); // Unix 时间戳是秒，需要乘以 1000
-        const year = date.getFullYear();
-        const month = String(date.getMonth() + 1).padStart(2, '0');
-        const day = String(date.getDate()).padStart(2, '0');
-        const hours = String(date.getHours()).padStart(2, '0');
-        const minutes = String(date.getMinutes()).padStart(2, '0');
-        const seconds = String(date.getSeconds()).padStart(2, '0');
-        return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+    if (isNaN(timestamp) || timestamp <= 0) {
+        if (timeStr.includes('-') && timeStr.length === 5) return timeStr.replace('-', ':');
+        return timeStr;
     }
-    
-    // 处理 HH-MM 格式（向后兼容）
-    if (timeStr.includes('-') && timeStr.length === 5) {
-        return timeStr.replace('-', ':');
+    // 后端存的是秒；若误传毫秒（>= 1e12）则按毫秒用，否则按秒 * 1000
+    const ms = timestamp >= 1e12 ? timestamp : timestamp * 1000;
+    const date = new Date(ms);
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    const hours = String(date.getHours()).padStart(2, '0');
+    const minutes = String(date.getMinutes()).padStart(2, '0');
+    const today = new Date();
+    if (date.getFullYear() === today.getFullYear() && date.getMonth() === today.getMonth() && date.getDate() === today.getDate()) {
+        return `今天 ${hours}:${minutes}`;
     }
-    
-    // 处理其他格式
-    return timeStr;
+    if (date.getFullYear() === today.getFullYear()) {
+        return `${month}-${day} ${hours}:${minutes}`;
+    }
+    return `${year}-${month}-${day} ${hours}:${minutes}`;
 }
 
 // HTML 转义
