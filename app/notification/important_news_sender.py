@@ -73,34 +73,67 @@ def send_important_news_to_all_channels(
             print(f"[翻译] 初始化翻译器失败，将跳过翻译: {e}")
             translator = None
     
-    # 如果没有提供 split_content_func，使用默认实现
+    # 简单分批：(content, size) -> List[str]，按字节安全切分
+    def _simple_split(content: str, size: int) -> List[str]:
+        if not content:
+            return []
+        content_bytes = content.encode("utf-8")
+        batches = []
+        for i in range(0, len(content_bytes), size):
+            batch_bytes = content_bytes[i : i + size]
+            try:
+                batch = batch_bytes.decode("utf-8")
+            except UnicodeDecodeError:
+                for j in range(len(batch_bytes) - 1, max(0, len(batch_bytes) - 4), -1):
+                    try:
+                        batch = batch_bytes[:j].decode("utf-8")
+                        break
+                    except UnicodeDecodeError:
+                        continue
+                else:
+                    batch = batch_bytes.decode("utf-8", errors="ignore")
+            batches.append(batch)
+        return batches
+
+    # 若调用方传入的是仅支持 (content, size) 的函数，包装成同时支持「富参数」调用
+    # 富参数：split_content_func(report_data, format_type, update_info, max_bytes=..., mode=..., ...)
     if split_content_func is None:
-        def default_split_func(content: str, size: int) -> List[str]:
-            """默认的内容分批函数"""
-            if not content:
-                return []
-            content_bytes = content.encode('utf-8')
-            batches = []
-            for i in range(0, len(content_bytes), size):
-                batch_bytes = content_bytes[i:i+size]
-                # 尝试在最后一个完整字符处截断
-                try:
-                    batch = batch_bytes.decode('utf-8')
-                except UnicodeDecodeError:
-                    # 如果截断位置不完整，向前查找完整字符
-                    for j in range(len(batch_bytes) - 1, max(0, len(batch_bytes) - 4), -1):
-                        try:
-                            batch = batch_bytes[:j].decode('utf-8')
-                            break
-                        except UnicodeDecodeError:
-                            continue
-                    else:
-                        batch = batch_bytes.decode('utf-8', errors='ignore')
-                batches.append(batch)
-            return batches
-        
-        split_content_func = default_split_func
-    
+        underlying_split = _simple_split
+    else:
+        underlying_split = split_content_func
+
+    def _adapter_split(*args, **kwargs):
+        # 富参数调用：第一参为 dict（report_data），第二参为 str（format_type）
+        if (
+            len(args) >= 3
+            and isinstance(args[0], dict)
+            and isinstance(args[1], str)
+            and args[1] in ("feishu", "dingtalk", "wework", "telegram", "bark", "ntfy", "slack")
+        ):
+            report_data, format_type, update_info = args[0], args[1], args[2]
+            max_bytes = kwargs.get("max_bytes", 4000)
+            mode = kwargs.get("mode", "daily")
+            get_time_func = kwargs.get("get_time_func")
+            rss_items = kwargs.get("rss_items") or kwargs.get("rss_new_items")
+            from app.notification.renderer import render_report_content_for_platform
+
+            content = render_report_content_for_platform(
+                report_data,
+                format_type,
+                update_info=update_info,
+                mode=mode,
+                get_time_func=get_time_func,
+                rss_items=rss_items,
+                show_new_section=True,
+            )
+            return underlying_split(content, max_bytes)
+        # 简单调用：(content, size)
+        if len(args) >= 2:
+            return underlying_split(args[0], args[1])
+        return underlying_split(args[0], kwargs.get("max_bytes", 4000))
+
+    split_content_func = _adapter_split
+
     dispatcher = NotificationDispatcher(
         config=notification_config,
         get_time_func=get_time_func or (lambda: datetime.now()),
