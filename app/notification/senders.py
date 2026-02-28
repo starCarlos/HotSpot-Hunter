@@ -613,9 +613,16 @@ def send_to_telegram(
                     )
                     return False
             else:
+                err_detail = response.text
+                try:
+                    err_body = response.json()
+                    err_detail = err_body.get("description", err_detail)
+                except Exception:
+                    pass
                 print(
                     f"{log_prefix}第 {i}/{len(batches)} 批次发送失败 [{report_type}]，状态码：{response.status_code}"
                 )
+                print(f"{log_prefix}API 错误详情：{err_detail}")
                 return False
         except Exception as e:
             print(f"{log_prefix}第 {i}/{len(batches)} 批次发送出错 [{report_type}]：{e}")
